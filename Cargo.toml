@@ -1,0 +1,53 @@
+[package]
+name = "nord"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[workspace]
+resolver = "3"
+members = [
+    ".",
+    "crates/nord_app",
+    "crates/nord_log",
+    "crates/nord_render",
+    "crates/nord_world",
+    "crates/nord_generation",
+    "crates/nord_physics",
+]
+
+[workspace.package]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.85"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"
+
+[dependencies]
+nord_app = { path = "crates/nord_app" }
+nord_log = { path = "crates/nord_log" }
+nord_render = { path = "crates/nord_render" }
+nord_world = { path = "crates/nord_world" }
+nord_generation = { path = "crates/nord_generation" }
+nord_physics = { path = "crates/nord_physics" }
+
+[profile.dev]
+opt-level = 0
+debug = "full"
+incremental = true
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
+
+[lints]
+workspace = true

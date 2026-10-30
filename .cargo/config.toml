@@ -1,0 +1,5 @@
+[build]
+target-dir = "target"
+
+[alias]
+lint = "clippy --workspace --all-targets --all-features -- -D warnings"
