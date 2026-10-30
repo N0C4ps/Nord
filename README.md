@@ -9,9 +9,13 @@ Nord is a voxel sandbox game built on Nord Tech.
 - `scripts/`: PowerShell build and run entry points.
 - `target/`: Cargo build products, including debug and release executables.
 
+## Architecture
+
+See [docs/architecture.md](docs/architecture.md) for the rules that keep Nord Tech crates isolated and let the game compose them through their public APIs.
+
 ## Toolchain
 
-The repository pins the Rust channel to `stable` in `rust-toolchain.toml` and requests Clippy, rustfmt, and rust-analyzer. Install Rust through rustup, then use `cargo fmt --all`, `cargo lint`, and `cargo check --workspace`.
+The repository pins Rust `1.97.1` in `rust-toolchain.toml` and requests Clippy, rustfmt, and rust-analyzer. Install Rust through rustup, then use `cargo fmt --all`, `cargo lint`, and `cargo check --workspace`.
 
 ## Build and run
 
