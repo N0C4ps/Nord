@@ -34,10 +34,6 @@ pedantic = "warn"
 [dependencies]
 nord_app = { path = "crates/nord_app" }
 nord_log = { path = "crates/nord_log" }
-nord_render = { path = "crates/nord_render" }
-nord_world = { path = "crates/nord_world" }
-nord_generation = { path = "crates/nord_generation" }
-nord_physics = { path = "crates/nord_physics" }
 
 [profile.dev]
 opt-level = 0

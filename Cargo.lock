@@ -7,11 +7,7 @@ name = "nord"
 version = "0.1.0"
 dependencies = [
  "nord_app",
- "nord_generation",
  "nord_log",
- "nord_physics",
- "nord_render",
- "nord_world",
 ]
 
 [[package]]
