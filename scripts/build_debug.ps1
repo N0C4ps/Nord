@@ -1,12 +1,5 @@
 [CmdletBinding()]
 param()
 
-$ErrorActionPreference = 'Stop'
-$repoRoot = Split-Path -Parent $PSScriptRoot
-Push-Location $repoRoot
-try {
-    cargo build --workspace
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-} finally {
-    Pop-Location
-}
+. "$PSScriptRoot/_common.ps1"
+exit (Invoke-NordCargo -CargoArgs @('build', '--workspace', '--locked'))

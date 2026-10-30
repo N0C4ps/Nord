@@ -21,9 +21,14 @@ The repository pins Rust `1.97.1` in `rust-toolchain.toml` and requests Clippy, 
 
 ```powershell
 ./scripts/build_debug.ps1
+./scripts/build_fast.ps1
 ./scripts/build_release.ps1
 ./scripts/run_debug.ps1
+./scripts/run_fast.ps1
 ./scripts/run_release.ps1
+./scripts/validate.ps1
 ```
 
-Cargo writes build artifacts under `target/debug/` and `target/release/`.
+`release-fast` is an optimized build for quicker iteration; `release` is the shipping profile. Cargo writes build artifacts under `target/debug/`, `target/release-fast/`, and `target/release/`.
+
+For the full build pipeline and each script's purpose, see [docs/build-system.md](docs/build-system.md).

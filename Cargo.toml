@@ -7,6 +7,7 @@ publish = false
 
 [workspace]
 resolver = "3"
+default-members = ["."]
 members = [
     ".",
     "crates/nord_app",
@@ -48,6 +49,12 @@ lto = "thin"
 codegen-units = 1
 strip = "symbols"
 panic = "abort"
+
+[profile.release-fast]
+inherits = "release"
+lto = false
+codegen-units = 16
+strip = "none"
 
 [lints]
 workspace = true
