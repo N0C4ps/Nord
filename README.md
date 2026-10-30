@@ -18,6 +18,7 @@ The typed DI registry lives in `crates/nord_dependency`; its intended use and bo
 ## Version control
 
 See [docs/version-control.md](docs/version-control.md) for Git, line-ending, LFS, and collaboration conventions.
+Contributors should follow [CONTRIBUTING.md](CONTRIBUTING.md). GitHub Actions validates pull requests and Dependabot checks Cargo and workflow dependencies weekly.
 
 ## Toolchain
 

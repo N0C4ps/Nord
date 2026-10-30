@@ -1,5 +1,6 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$global:LASTEXITCODE = 0
 
 $script:NordRoot = Split-Path -Parent $PSScriptRoot
 

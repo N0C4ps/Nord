@@ -1,0 +1,35 @@
+name: Nord CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: validate
+    runs-on: windows-latest
+    steps:
+      - name: Check out source and LFS assets
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          lfs: true
+
+      - name: Show pinned Rust toolchain
+        run: rustc --version
+
+      - name: Validate architecture, format, lint, and workspace
+        run: ./scripts/validate.ps1
+
+      - name: Build debug
+        run: ./scripts/build_debug.ps1
+
+      - name: Build release-fast
+        run: ./scripts/build_fast.ps1
+
+      - name: Build release
+        run: ./scripts/build_release.ps1
