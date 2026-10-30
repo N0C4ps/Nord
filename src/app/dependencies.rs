@@ -1,4 +1,4 @@
-use nord_dependency::{DependencyBuilder, DependencyError};
+use nord_app::{ApplicationServicesBuilder, ApplicationServicesError};
 use std::sync::Arc;
 
 pub(super) struct AppDependencies {
@@ -7,8 +7,8 @@ pub(super) struct AppDependencies {
 }
 
 impl AppDependencies {
-    pub(super) fn build() -> Result<Self, DependencyError> {
-        let mut builder = DependencyBuilder::new();
+    pub(super) fn build() -> Result<Self, ApplicationServicesError> {
+        let mut builder = ApplicationServicesBuilder::new();
         builder.register(GameSettings { title: "Nord starting" })?;
         builder.register(GameLogger { channel: "GAME" })?;
 

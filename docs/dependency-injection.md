@@ -31,7 +31,7 @@ let audio_backend = services.get::<AudioBackend>()?;
 
 This example shows the container API only. In the game, keep resolution in `src/app/` and pass the resulting handles to game modules and constructors.
 
-The game now follows that boundary in `src/app/dependencies.rs`: it owns registration and resolution, then exposes an `AppDependencies` value containing game-owned types. Other game modules do not import `nord_dependency`. If the DI crate's API or implementation changes, this adapter is the one place to update as long as `AppDependencies` remains the same.
+The game composes services in `src/app/dependencies.rs` through the stable application API in `nord_app`. The engine crate `nord_app` wraps `nord_dependency`; the game never imports the DI crate directly. `AppDependencies` exposes game-owned types to the rest of `src/`.
 
 ## Design rules
 
@@ -46,9 +46,9 @@ The container is intentionally modest. If a concrete system later needs scoped l
 
 ## Change isolation guarantee
 
-The game-facing contract is the set of constructors and typed dependency bundles owned by `src/app/`, not the builder/container API. Keep all calls to `DependencyBuilder` and `DependencyContainer` inside `src/app/dependencies.rs`. Engine and gameplay modules should receive narrow values and must not store or query the container.
+The game-facing contract is `nord_app::ApplicationServicesBuilder` / `ApplicationServices` plus the typed bundle owned by `src/app/`, not `DependencyBuilder` / `DependencyContainer`. Keep all references to `nord_dependency` inside `crates/nord_app`; `src/` and all other engine crates must not import it. Engine and gameplay modules receive narrow values and must not store or query the container.
 
-This means an implementation rewrite, a different storage strategy, a different container crate, or public API changes in `nord_dependency` should require edits only in that adapter. The application entry point exposes a general error interface rather than leaking `DependencyError`.
+This means an implementation rewrite, a different storage strategy, a different container crate, or public API changes in `nord_dependency` should require edits only in `crates/nord_app`. The game entry point exposes a general error interface rather than leaking either container's error type.
 
 When a service is added or replaced, update its registration and mapping in the adapter. Only update a consumer when its actual required capability or behavior changes; that change is independent of the DI implementation. This keeps dependency-manager changes from spreading through `src/` while still making real application dependencies explicit.
 
