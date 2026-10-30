@@ -1,0 +1,44 @@
+name: Repository backup
+
+on:
+  schedule:
+    - cron: "20 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    name: backup
+    runs-on: windows-latest
+    steps:
+      - name: Check out complete Git and LFS history
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - name: Create Git bundle
+        shell: pwsh
+        run: git bundle create "$env:RUNNER_TEMP/nord-repository.bundle" --all
+
+      - name: Download LFS objects and archive them
+        shell: pwsh
+        run: |
+          git lfs fetch --all origin
+          $lfsObjects = Join-Path $PWD '.git/lfs/objects'
+          if (-not (Test-Path $lfsObjects)) {
+            New-Item -ItemType Directory -Path $lfsObjects -Force | Out-Null
+          }
+          Compress-Archive -Path $lfsObjects -DestinationPath "$env:RUNNER_TEMP/nord-lfs-objects.zip" -Force
+
+      - name: Store rolling backup artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nord-backup-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/nord-repository.bundle
+            ${{ runner.temp }}/nord-lfs-objects.zip
+          if-no-files-found: error
+          retention-days: 90
