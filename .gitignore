@@ -1,6 +1,11 @@
 /target/
+/build/
+/dist/
 /.idea/
 /.vscode/
 *.swp
 *.swo
 *.rs.bk
+*.log
+.DS_Store
+Thumbs.db

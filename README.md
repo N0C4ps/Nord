@@ -15,6 +15,10 @@ See [docs/architecture.md](docs/architecture.md) for the rules that keep Nord Te
 
 The typed DI registry lives in `crates/nord_dependency`; its intended use and boundaries are described in [docs/dependency-injection.md](docs/dependency-injection.md).
 
+## Version control
+
+See [docs/version-control.md](docs/version-control.md) for Git, line-ending, LFS, and collaboration conventions.
+
 ## Toolchain
 
 The repository pins Rust `1.97.1` in `rust-toolchain.toml` and requests Clippy, rustfmt, and rust-analyzer. Install Rust through rustup, then use `cargo fmt --all`, `cargo lint`, and `cargo check --workspace`.
