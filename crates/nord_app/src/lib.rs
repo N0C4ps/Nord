@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 /// Stable application-facing error for service registration and lookup.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ApplicationServicesError {
     /// A concrete service type has already been registered.
     AlreadyRegistered { type_name: &'static str },

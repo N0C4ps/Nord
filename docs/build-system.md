@@ -31,7 +31,8 @@ The release profile favors optimization quality and may compile/link more slowly
 | `format.ps1` | Format all workspace Rust code. |
 | `format_check.ps1` | Check formatting without modifying files. |
 | `docs.ps1` | Generate workspace documentation under `target/doc-build/doc/`. |
-| `validate.ps1` | Run format check, Clippy, and workspace check in sequence. |
+| `check_architecture.ps1` | Ensure the game source does not depend directly on `nord_dependency`. |
+| `validate.ps1` | Run architecture guard, format check, Clippy, and workspace check in sequence. |
 | `build_timed.ps1` | Build with Cargo timing reports; accepts `-Release` or `-Fast`. |
 | `clean.ps1` | Remove generated Cargo outputs from `target/`. |
 

@@ -48,7 +48,7 @@ The container is intentionally modest. If a concrete system later needs scoped l
 
 The game-facing contract is `nord_app::ApplicationServicesBuilder` / `ApplicationServices` plus the typed bundle owned by `src/app/`, not `DependencyBuilder` / `DependencyContainer`. Keep all references to `nord_dependency` inside `crates/nord_app`; `src/` and all other engine crates must not import it. Engine and gameplay modules receive narrow values and must not store or query the container.
 
-This means an implementation rewrite, a different storage strategy, a different container crate, or public API changes in `nord_dependency` should require edits only in `crates/nord_app`. The game entry point exposes a general error interface rather than leaking either container's error type.
+This means an implementation rewrite, a different storage strategy, a different container crate, or public API changes in `nord_dependency` should require edits only in `crates/nord_app`. The game entry point exposes a general error interface rather than leaking either container's error type. `scripts/check_architecture.ps1` checks this boundary, and `scripts/validate.ps1` runs that guard automatically.
 
 When a service is added or replaced, update its registration and mapping in the adapter. Only update a consumer when its actual required capability or behavior changes; that change is independent of the DI implementation. This keeps dependency-manager changes from spreading through `src/` while still making real application dependencies explicit.
 
@@ -59,3 +59,4 @@ Rust traits provide explicit interfaces, while trait objects offer runtime polym
 - [Rust Reference: traits](https://doc.rust-lang.org/reference/items/traits.html)
 - [Rust Reference: trait objects](https://doc.rust-lang.org/reference/types/trait-object.html)
 - [Rust Book: traits and generics](https://doc.rust-lang.org/book/ch10-02-traits.html)
+- [Cargo SemVer compatibility](https://doc.rust-lang.org/cargo/reference/semver.html): additive evolution, deprecation, and compatibility expectations.
