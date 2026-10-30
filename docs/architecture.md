@@ -31,6 +31,8 @@ O fluxo de dependência deve apontar para as APIs das bibliotecas: o jogo conhec
 
 A crate `nord_dependency` só pode ser referenciada por `crates/nord_app`, que mantém a API estável de serviços usada pela aplicação. `src/` não conhece a crate de DI nem os tipos do container; alterações internas ou incompatíveis no DI ficam isoladas em `crates/nord_app`.
 
+Da mesma forma, `nord_platform` fornece capacidades nativas genéricas, enquanto `nord_app` mantém a fachada de plataforma usada pelo jogo. `src/` integra `ApplicationPlatform` via os serviços da aplicação e não importa `nord_platform` diretamente. O escopo e as capacidades atuais estão em [platform-abstraction.md](platform-abstraction.md).
+
 ## Evolução e compatibilidade
 
 O objetivo é permitir melhorar ou substituir a implementação interna de uma crate sem reescrever o jogo, desde que sua API pública permaneça compatível. Quando uma mudança de API for realmente necessária, ela deve ser explícita e suas consequências para os consumidores devem ser avaliadas.
