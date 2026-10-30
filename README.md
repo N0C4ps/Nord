@@ -1,5 +1,7 @@
 # Nord
 
+The native platform layer and its `nord_app` facade are described in [docs/platform-abstraction.md](docs/platform-abstraction.md).
+
 Nord is a voxel sandbox game built on Nord Tech.
 
 ## Repository layout

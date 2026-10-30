@@ -15,6 +15,7 @@ name = "nord_app"
 version = "0.1.0"
 dependencies = [
  "nord_dependency",
+ "nord_platform",
 ]
 
 [[package]]
@@ -31,6 +32,10 @@ version = "0.1.0"
 
 [[package]]
 name = "nord_physics"
+version = "0.1.0"
+
+[[package]]
+name = "nord_platform"
 version = "0.1.0"
 
 [[package]]

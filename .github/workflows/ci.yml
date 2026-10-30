@@ -33,3 +33,23 @@ jobs:
 
       - name: Build release
         run: ./scripts/build_release.ps1
+
+  native-platforms:
+    name: native-platforms (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+
+      - name: Show pinned Rust toolchain
+        run: rustc --version
+
+      - name: Lint all native platform backends
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+      - name: Compile all native platform backends
+        run: cargo check --workspace --all-targets --all-features --locked

@@ -17,6 +17,7 @@ members = [
     "crates/nord_world",
     "crates/nord_generation",
     "crates/nord_physics",
+    "crates/nord_platform",
 ]
 
 [workspace.package]

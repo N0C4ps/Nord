@@ -1,5 +1,17 @@
 //! Application lifecycle infrastructure for Nord Tech consumers.
 
+mod platform;
+
+pub use platform::{
+    ApplicationEventEmitter, ApplicationEventError, ApplicationFileAccess,
+    ApplicationFileDisposition, ApplicationFileHandle, ApplicationFileOpenOptions,
+    ApplicationFileSystem, ApplicationInputEvent, ApplicationKeyCode, ApplicationLifecycleEvent,
+    ApplicationModifiers, ApplicationPlatform, ApplicationPlatformBackend,
+    ApplicationPlatformError, ApplicationPlatformEvent, ApplicationPlatformEventKind,
+    ApplicationPointerButton, ApplicationTimestamp, ApplicationWindowEvent,
+    ApplicationWindowHandle,
+};
+
 use nord_dependency::{DependencyBuilder, DependencyContainer, DependencyError};
 use std::any::{Any, type_name};
 use std::error::Error;

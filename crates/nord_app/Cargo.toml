@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 nord_dependency = { path = "../nord_dependency" }
+nord_platform = { path = "../nord_platform" }
 
 [lints]
 workspace = true
