@@ -29,6 +29,8 @@ O fluxo de dependência deve apontar para as APIs das bibliotecas: o jogo conhec
 
 `nord_dependency` fornece o registro tipado para a composição inicial das funcionalidades. O registro fica na raiz de composição (`src/app/`); sistemas recebem os serviços necessários por parâmetros de construção. O container não deve se tornar um singleton global nem ser passado a cada sistema para buscas arbitrárias, porque isso esconderia as dependências reais dos módulos.
 
+A crate `nord_dependency` só pode ser referenciada pelo adaptador `src/app/dependencies.rs`. O restante do jogo depende de tipos e interfaces próprios da aplicação; erros específicos do container também são convertidos na fronteira de `src/app/`.
+
 ## Evolução e compatibilidade
 
 O objetivo é permitir melhorar ou substituir a implementação interna de uma crate sem reescrever o jogo, desde que sua API pública permaneça compatível. Quando uma mudança de API for realmente necessária, ela deve ser explícita e suas consequências para os consumidores devem ser avaliadas.

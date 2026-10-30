@@ -48,7 +48,9 @@ The container is intentionally modest. If a concrete system later needs scoped l
 
 The game-facing contract is the set of constructors and typed dependency bundles owned by `src/app/`, not the builder/container API. Keep all calls to `DependencyBuilder` and `DependencyContainer` inside `src/app/dependencies.rs`. Engine and gameplay modules should receive narrow values and must not store or query the container.
 
-This means an implementation rewrite, a different storage strategy, or most API changes in `nord_dependency` should require edits only in that adapter. A change to the actual services or to what a system needs can still require updating that system's constructor and the composition root; no DI design can remove that real dependency change. The goal is to prevent DI-specific changes from spreading through `src/`.
+This means an implementation rewrite, a different storage strategy, a different container crate, or public API changes in `nord_dependency` should require edits only in that adapter. The application entry point exposes a general error interface rather than leaking `DependencyError`.
+
+When a service is added or replaced, update its registration and mapping in the adapter. Only update a consumer when its actual required capability or behavior changes; that change is independent of the DI implementation. This keeps dependency-manager changes from spreading through `src/` while still making real application dependencies explicit.
 
 ## Research basis
 
