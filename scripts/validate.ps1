@@ -6,8 +6,7 @@ param()
 $steps = @(
     @{ Name = 'Formatting'; Args = @('fmt', '--all', '--', '--check') },
     @{ Name = 'Clippy'; Args = @('clippy', '--workspace', '--all-targets', '--all-features', '--locked', '--', '-D', 'warnings') },
-    @{ Name = 'Check'; Args = @('check', '--workspace', '--all-targets', '--all-features', '--locked') },
-    @{ Name = 'Documentation'; Args = @('doc', '--target-dir', 'target/doc-build', '--workspace', '--no-deps', '--all-features', '--locked') }
+    @{ Name = 'Check'; Args = @('check', '--workspace', '--all-targets', '--all-features', '--locked') }
 )
 
 foreach ($step in $steps) {

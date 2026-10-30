@@ -31,6 +31,8 @@ let audio_backend = services.get::<AudioBackend>()?;
 
 This example shows the container API only. In the game, keep resolution in `src/app/` and pass the resulting handles to game modules and constructors.
 
+The game now follows that boundary in `src/app/dependencies.rs`: it owns registration and resolution, then exposes an `AppDependencies` value containing game-owned types. Other game modules do not import `nord_dependency`. If the DI crate's API or implementation changes, this adapter is the one place to update as long as `AppDependencies` remains the same.
+
 ## Design rules
 
 - **Explicit composition:** register and resolve services at startup or another clear composition boundary. Do not use a process-global container.
@@ -41,6 +43,12 @@ This example shows the container API only. In the game, keep resolution in `src/
 - **No hidden construction:** this version does not run arbitrary factories, infer a dependency graph, or create transient instances. Construct services explicitly so failures and ownership are easy to follow.
 
 The container is intentionally modest. If a concrete system later needs scoped lifetimes, async construction, fallible factories, or compile-time graph checking, add that capability based on an actual use case instead of paying for it in every build now.
+
+## Change isolation guarantee
+
+The game-facing contract is the set of constructors and typed dependency bundles owned by `src/app/`, not the builder/container API. Keep all calls to `DependencyBuilder` and `DependencyContainer` inside `src/app/dependencies.rs`. Engine and gameplay modules should receive narrow values and must not store or query the container.
+
+This means an implementation rewrite, a different storage strategy, or most API changes in `nord_dependency` should require edits only in that adapter. A change to the actual services or to what a system needs can still require updating that system's constructor and the composition root; no DI design can remove that real dependency change. The goal is to prevent DI-specific changes from spreading through `src/`.
 
 ## Research basis
 

@@ -5,5 +5,8 @@ mod render;
 mod world;
 
 fn main() {
-    app::run();
+    if let Err(error) = app::run() {
+        eprintln!("Nord failed to start: {error}");
+        std::process::exit(1);
+    }
 }
