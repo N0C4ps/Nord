@@ -3,10 +3,10 @@
 ## Ownership and dependency direction
 
 `crates/nord_platform` implements reusable native platform capabilities. It
-contains no Nord gameplay rules and does not create windows. `crates/nord_app`
-owns the application-facing facade (`ApplicationPlatform`) and is the only
-crate that depends on `nord_platform`. The game uses that facade through its
-application service registry; game modules must not import `nord_platform`.
+contains no Nord gameplay rules. `crates/nord_app` owns the application-facing
+facade (`ApplicationPlatform`) and is the only crate that depends on
+`nord_platform`. Game modules use that facade through the application service
+registry; game code must not import `nord_platform` or native OS APIs.
 
 This boundary lets the platform implementation evolve independently while
 keeping the game's integration contract in `nord_app`. Source compatibility
@@ -15,83 +15,83 @@ depends on keeping that public contract compatible.
 ## Capabilities
 
 - **Backend identity:** native backend and target architecture are selected at
-  compile time. Windows is the primary development target; Linux and macOS
-  backend modules are selected through target-specific compilation.
+  compile time. Windows is the primary development target.
 - **Application paths:** data, config, cache, and temporary paths are resolved
-  without creating directories implicitly. Call `ensure_*_dir` at the point
-  where the corresponding resource is needed.
-- **Monotonic time:** elapsed timestamps use `std::time::Instant`, not wall
-  clock time, so system clock adjustments do not move frame or event time
-  backwards.
-- **Explicit file resources:** opening returns an opaque, generation-checked
-  handle; reading, writing, seeking, flushing, and closing go through the
-  owning filesystem capability. Stale/closed handles are rejected. The
-  synchronous API is for control/configuration and modest I/O; streamed asset
-  workloads should use a future asynchronous asset subsystem.
-- **Normalized event queue:** lifecycle, window, keyboard, and pointer events
-  share a platform-neutral payload, monotonic timestamp, and ordered sequence.
-  Producers enqueue into a bounded queue; a full queue returns an explicit
-  error, and the application drains into a reusable buffer. Window/input event
-  types are contracts for future native subsystems; this crate does not yet
-  create a window or poll OS input.
-- **Opaque window identity:** a window handle does not expose its numeric value
-  to game code. A future window owner will allocate and interpret IDs.
+  without creating directories implicitly. Call `ensure_*_dir` when needed.
+- **Monotonic time:** elapsed timestamps use `std::time::Instant`, so wall
+  clock adjustments do not move frame or event time backwards.
+- **Explicit file resources:** opening returns an opaque handle; reading,
+  writing, seeking, flushing, and closing go through the owning filesystem.
+- **Native window capability:** `WindowSystem` creates and owns top-level
+  windows using opaque `WindowHandle`s. Window configuration, close, resize,
+  focus, and DPI events are platform-neutral; raw HWND values stay inside the
+  Windows backend. Window creation, message pumping, and destruction are bound
+  to the thread that initialized the platform. Wrong-thread calls return an
+  explicit error.
+- **Display queries:** `DisplayManager` returns fresh snapshots of connected
+  monitors: device name, virtual-desktop bounds, usable work area, and primary
+  status. It can find the monitor containing a point. Startup logs a compact
+  primary-display summary. Snapshots avoid retaining stale native monitor
+  handles across display hot-plug changes.
+- **Normalized event queue:** events have monotonic timestamps and an ordered
+  sequence. Producers enqueue into a bounded queue and the application drains
+  into a reusable buffer. Queue saturation returns an explicit error. Current
+  Win32 messages produce close, resize, focus, and DPI notifications. Keyboard
+  and pointer messages are normalized by the platform backend into the separate
+  `nord_inputs` contracts.
 
 ## Native backends
 
-The backend is selected with Rust's `cfg(target_os)` at compile time. Native
-details stay in `crates/nord_platform/src/backend/`; capability APIs remain
-platform-neutral. Windows resolves user data using `LOCALAPPDATA` and roaming
-configuration using `APPDATA`. Linux follows XDG data/config/cache environment
-variables and standard home-directory fallbacks. macOS uses the user Library
-locations for Application Support, Preferences, and Caches.
+Backend selection uses Rust `cfg(target_os)` and native details stay in
+`crates/nord_platform/src/backend/`. Windows uses a thin `windows-sys` binding
+layer. Its window procedure does only small event translations and delegates
+unhandled messages to `DefWindowProcW`; the application pumps pending messages
+without blocking in its frame loop. The game executable embeds an application
+manifest that requests Per-Monitor-V2 DPI awareness, with Per-Monitor fallback.
+Display enumeration uses `EnumDisplayMonitors` and `GetMonitorInfoW`; it reads
+the current layout without changing system display modes.
 
-Use platform-native `PathBuf` paths and `OsStr` values instead of assuming that
-native paths are UTF-8. Keep raw OS handles private to the backend. Future
-OS-specific capabilities should use narrow, owned APIs with backend-specific
-implementations selected behind the same facade.
+Linux and macOS currently implement path discovery only. The platform-neutral
+window API is in place, but those native window backends still need their own
+implementations before the game can open a window on those systems.
+
+Use native `PathBuf` and `OsStr` values rather than assuming paths are UTF-8.
+Keep raw OS handles private to backend code. Future capabilities such as
+clipboard or controller input should use narrow, owned APIs behind the same
+facade.
 
 ## Threading and lifecycle
 
-`ApplicationPlatform` is owned by the application service container. The event
-emitter is cloneable for subsystem producers. Queue synchronization protects
-sequence assignment and insertion together, so sequence numbers represent
+`ApplicationPlatform` is owned by the application service container. The
+event emitter is cloneable for subsystem producers. Queue synchronization
+protects sequence assignment and insertion together, so sequence values match
 enqueue order when producers contend. The queue is bounded to prevent
-unbounded growth; producers must handle backpressure rather than silently
-dropping events.
+unbounded growth.
 
-File operations are synchronized and resource lifetime is explicit. Close file
-handles when their owner is done. The platform object itself does not open
-files, create directories, start threads, or initialize a GUI event loop as a
-side effect of construction.
+Windows HWNDs must be created, pumped, and destroyed on their owner thread.
+`ApplicationRuntime` polls native messages each frame; the game destroys its
+main window during orderly shutdown. `WindowSystem` also destroys any remaining
+windows when dropped on the owner thread. Keep window procedure callbacks short
+because they block message processing on that thread.
 
-## Scope and extension points
+Window and lifecycle events are dispatched through the `nord_app` event facade
+on the application thread. Keyboard and pointer events are delivered to the
+input facade, which tracks held state per window and clears it on focus loss.
+Game modules subscribe through these application-facing facades; they do not
+depend on `nord_events`, `nord_inputs`, or native message types directly.
 
-This initial PAL establishes backend selection, application directories,
-monotonic time, explicit file resources, and normalized events. It does not
-claim to implement every future platform service. Window creation, raw input
-polling, native dialogs, clipboard, controllers, display enumeration, power
-notifications, and asynchronous I/O should be introduced as separate
-capabilities when needed. A future `nord_window` should own window creation
-and native GUI event-loop constraints; it should send normalized window/input
-events through the PAL contract.
-
-## Validation
-
-The workspace architecture check enforces that `src/` does not import
-`nord_platform` and that `nord_app` is its sole direct engine-crate consumer.
-The workspace build checks the currently selected native backend. Linux and
-macOS modules should also be compiled in CI runners for those operating systems
-before shipping support on those targets.
+The platform object does not open files, create directories, or start threads.
+Registering the Win32 window class and creating an HWND happen only after the
+application explicitly requests a window.
 
 ## Technical references
 
-- [Rust conditional compilation reference](https://doc.rust-lang.org/reference/conditional-compilation.html)
-  for compile-time backend selection.
+- [Rust conditional compilation](https://doc.rust-lang.org/reference/conditional-compilation.html)
 - [`std::time::Instant`](https://doc.rust-lang.org/stable/std/time/struct.Instant.html)
-  for monotonic time and the platform-native clock behavior.
-- [`std::path`](https://doc.rust-lang.org/stable/std/path/) for preserving
-  native path representations.
-- [winit event-loop documentation](https://docs.rs/winit/latest/src/winit/event_loop.rs.html)
-  for the main-thread and once-per-application constraints to account for when
-  the separate window subsystem is designed.
+- [Microsoft: creating a window](https://learn.microsoft.com/en-us/windows/win32/learnwin32/creating-a-window)
+- [Microsoft: writing the window procedure](https://learn.microsoft.com/en-us/windows/win32/learnwin32/writing-the-window-procedure)
+- [Microsoft: setting process DPI awareness](https://learn.microsoft.com/en-us/windows/win32/hidpi/setting-the-default-dpi-awareness-for-a-process)
+- [Microsoft: enumerating display monitors](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-enumdisplaymonitors)
+- [Microsoft: retrieving monitor information](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getmonitorinfow)
+- [Microsoft: finding a monitor for a window](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-monitorfromwindow)
+- [`windows-sys` Windows message APIs](https://docs.rs/windows-sys/0.61.2/windows_sys/Win32/UI/WindowsAndMessaging/index.html)

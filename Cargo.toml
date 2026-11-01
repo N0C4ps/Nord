@@ -12,29 +12,42 @@ members = [
     ".",
     "crates/nord_app",
     "crates/nord_dependency",
+    "crates/nord_events",
+    "crates/nord_inputs",
+    "crates/nord_crash",
+    "crates/nord_diagnostics",
+    "crates/nord_memory",
+    "crates/nord_hash",
+    "crates/nord_time",
+    "crates/nord_config",
+    "crates/nord_threading",
+    "crates/nord_jobs",
+    "crates/nord_scheduler",
     "crates/nord_log",
     "crates/nord_render",
     "crates/nord_world",
     "crates/nord_generation",
     "crates/nord_physics",
     "crates/nord_platform",
+    "crates/nord_math",
 ]
 
 [workspace.package]
 edition = "2024"
 license = "MIT OR Apache-2.0"
-rust-version = "1.85"
+rust-version = "1.88"
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+unsafe_code = "deny"
 
 [workspace.lints.clippy]
 all = "warn"
 pedantic = "warn"
 
 [dependencies]
+ctrlc = "3.5.2"
 nord_app = { path = "crates/nord_app" }
-nord_log = { path = "crates/nord_log" }
+serde = { version = "1.0", features = ["derive"] }
 
 [profile.dev]
 opt-level = 0
@@ -45,7 +58,8 @@ incremental = true
 opt-level = 3
 lto = "thin"
 codegen-units = 1
-strip = "symbols"
+debug = 1
+strip = "none"
 panic = "abort"
 
 [profile.release-fast]

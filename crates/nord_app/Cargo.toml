@@ -6,7 +6,22 @@ license.workspace = true
 
 [dependencies]
 nord_dependency = { path = "../nord_dependency" }
+nord_crash = { path = "../nord_crash" }
+nord_diagnostics = { path = "../nord_diagnostics" }
 nord_platform = { path = "../nord_platform" }
+raw-window-handle = "0.6.2"
+nord_log = { path = "../nord_log" }
+nord_memory = { path = "../nord_memory" }
+nord_hash = { path = "../nord_hash" }
+nord_time = { path = "../nord_time" }
+nord_config = { path = "../nord_config" }
+nord_threading = { path = "../nord_threading" }
+nord_jobs = { path = "../nord_jobs" }
+nord_scheduler = { path = "../nord_scheduler" }
+nord_events = { path = "../nord_events" }
+nord_inputs = { path = "../nord_inputs" }
+nord_math = { path = "../nord_math" }
+nord_render = { path = "../nord_render" }
 
 [lints]
 workspace = true

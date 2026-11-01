@@ -1,0 +1,23 @@
+[application]
+title = "Nord"
+
+[window]
+width = 1280
+height = 720
+resizable = true
+
+[threading]
+# Omit this value to reserve one logical processor for the application thread.
+# worker_threads = 7
+
+[tasks]
+queue_capacity = 2048
+# Omit this value to allow up to the worker-pool size in flight.
+# max_in_flight = 7
+priority_aging_interval_ms = 250
+
+[timing]
+max_frame_delta_ms = 250
+fixed_step_ns = 16666667
+max_steps_per_frame = 8
+time_scale = 1.0

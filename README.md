@@ -2,6 +2,8 @@
 
 The native platform layer and its `nord_app` facade are described in [docs/platform-abstraction.md](docs/platform-abstraction.md).
 
+The asynchronous structured logging pipeline and its crash-diagnostic scope are described in [docs/logging.md](docs/logging.md).
+
 Nord is a voxel sandbox game built on Nord Tech.
 
 ## Repository layout
@@ -24,7 +26,7 @@ Contributors should follow [CONTRIBUTING.md](CONTRIBUTING.md). GitHub Actions va
 
 ## Toolchain
 
-The repository pins Rust `1.97.1` in `rust-toolchain.toml` and requests Clippy, rustfmt, and rust-analyzer. Install Rust through rustup, then use `cargo fmt --all`, `cargo lint`, and `cargo check --workspace`.
+The repository pins Rust `1.97.1` in `rust-toolchain.toml` (workspace MSRV `1.88`) and requests Clippy, rustfmt, and rust-analyzer. Install Rust through rustup, then use `cargo fmt --all`, `cargo lint`, and `cargo check --workspace`.
 
 ## Build and run
 

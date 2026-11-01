@@ -1,0 +1,11 @@
+[package]
+name = "nord_threading"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rayon = "1.12"
+
+[lints]
+workspace = true

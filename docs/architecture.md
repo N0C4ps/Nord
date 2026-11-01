@@ -33,6 +33,55 @@ A crate `nord_dependency` só pode ser referenciada por `crates/nord_app`, que m
 
 Da mesma forma, `nord_platform` fornece capacidades nativas genéricas, enquanto `nord_app` mantém a fachada de plataforma usada pelo jogo. `src/` integra `ApplicationPlatform` via os serviços da aplicação e não importa `nord_platform` diretamente. O escopo e as capacidades atuais estão em [platform-abstraction.md](platform-abstraction.md).
 
+`nord_log` fornece a infraestrutura de eventos estruturados e sinks assíncronos; a fachada `nord_app` configura e expõe os macros e serviços de logging ao jogo. `src/` não depende diretamente de `nord_log`. A configuração e as garantias de fila estão em [logging.md](logging.md).
+
+`nord_crash` cuida do panic hook, relatórios locais e minidumps nativos fora de
+processo. `nord_app` expõe o reporter e coordena um flush limitado do logger
+antes da gravação do panic report. Consulte [crash-diagnostics.md](crash-diagnostics.md).
+
+`nord_diagnostics` fornece contexto para cadeias de erro e assertions de
+invariantes. `nord_app` mantém a fachada estável; `src/` usa `Result` com
+contexto para falhas recuperáveis e assertions para invariantes do próprio
+programa. As bibliotecas mantêm erros concretos em suas APIs. Consulte
+[diagnostics.md](diagnostics.md) para as regras e os exemplos.
+
+`nord_memory` fornece orçamentos explícitos, scratch arenas e pools tipados
+reutilizáveis. `nord_app` mantém a fachada usada pelo jogo. O alocador global
+do processo continua sendo uma escolha do executável; a crate não depende da
+API instável de allocator nem substitui o heap global. Consulte
+[memory-management.md](memory-management.md).
+
+`nord_hash` fornece digests BLAKE3 estáveis, hashing incremental de arquivos e
+builders estruturados com domínio e campos tipados para conteúdo e cache keys.
+`nord_app` mantém a fachada para o jogo; `HashMap` continua usando seu hasher
+próprio para lookup em memória. Consulte [hash-utilities.md](hash-utilities.md).
+
+`nord_math` reúne primitivas de álgebra linear, geometria validada e consultas
+espaciais. Crates de engine que precisam de operações matemáticas podem depender
+dele; o jogo usa aliases estáveis via `nord_app`. O backend vetorial fica
+encapsulado em `nord_math`. Consulte [math-system.md](math-system.md).
+
+`nord_time` fornece clocks monotônicos, timestamps de parede, amostras de FPS,
+stopwatch e scheduling de simulação por passo fixo. `nord_app` expõe esses tipos
+ao jogo; o runtime alimenta a simulação com o delta limitado e mantém o
+interpolador e as métricas de frame. Consulte [time-system.md](time-system.md).
+
+`nord_config` combina defaults tipados, overlays JSON/TOML e variáveis de
+ambiente com validação no fim da composição. `nord_app` mantém a fachada, e o
+schema com as regras específicas do jogo pertence a `src/app/config.rs`.
+Consulte [configuration.md](configuration.md).
+
+`nord_threading` mantém pools de workers explicitamente possuídos; `nord_jobs`
+fornece operações paralelas de dados usando o scheduler work-stealing do Rayon;
+`nord_scheduler` controla fila limitada, prioridade, cancelamento cooperativo,
+handles e shutdown de tarefas maiores. `nord_app` registra os serviços e fornece
+a fachada ao jogo, sem expor Rayon em `src/`. Consulte
+[threading-and-jobs.md](threading-and-jobs.md).
+
+`src/app/` coordena bootstrap, runtime, lifecycle, shutdown e o limite de
+tratamento de erros do jogo. O loop de jogo permanece em `src/gameloop/`; o
+estado inicial e os limites do runtime estão em [application-runtime.md](application-runtime.md).
+
 ## Evolução e compatibilidade
 
 O objetivo é permitir melhorar ou substituir a implementação interna de uma crate sem reescrever o jogo, desde que sua API pública permaneça compatível. Quando uma mudança de API for realmente necessária, ela deve ser explícita e suas consequências para os consumidores devem ser avaliadas.

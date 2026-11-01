@@ -1,0 +1,24 @@
+{
+  "application": {
+    "title": "Nord"
+  },
+  "window": {
+    "width": 1280,
+    "height": 720,
+    "resizable": true
+  },
+  "threading": {
+    "worker_threads": null
+  },
+  "tasks": {
+    "queue_capacity": 2048,
+    "max_in_flight": null,
+    "priority_aging_interval_ms": 250
+  },
+  "timing": {
+    "max_frame_delta_ms": 250,
+    "fixed_step_ns": 16666667,
+    "max_steps_per_frame": 8,
+    "time_scale": 1.0
+  }
+}

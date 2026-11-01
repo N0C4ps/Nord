@@ -23,3 +23,24 @@ function Invoke-NordCargo {
         Pop-Location
     }
 }
+
+function Invoke-NordRun {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string[]]$CargoArgs
+    )
+
+    $shortTemp = Join-Path (Join-Path $script:NordRoot 'target') 't'
+    New-Item -ItemType Directory -Path $shortTemp -Force | Out-Null
+    $previousTemp = $env:TEMP
+    $previousTmp = $env:TMP
+    try {
+        $env:TEMP = $shortTemp
+        $env:TMP = $shortTemp
+        Invoke-NordCargo -CargoArgs $CargoArgs
+    } finally {
+        $env:TEMP = $previousTemp
+        $env:TMP = $previousTmp
+    }
+}

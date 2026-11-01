@@ -1,19 +1,19 @@
 //! Stable application-facing facade over Nord's native platform services.
 
+use crate::events::ApplicationWindowHandle;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::path::Path;
 use std::time::Duration;
 
 pub use nord_platform::{
-    ApplicationLifecycleEvent, EventError as ApplicationEventError,
+    DisplayError as ApplicationDisplayError, DisplayMonitor as ApplicationDisplayMonitor,
+    DisplayRect as ApplicationDisplayRect, EventError as ApplicationEventError,
     FileAccess as ApplicationFileAccess, FileDisposition as ApplicationFileDisposition,
     FileHandle as ApplicationFileHandle, FileOpenOptions as ApplicationFileOpenOptions,
-    FileSystem as ApplicationFileSystem, InputEvent as ApplicationInputEvent,
-    KeyCode as ApplicationKeyCode, Modifiers as ApplicationModifiers,
-    PlatformEvent as ApplicationPlatformEvent, PlatformEventKind as ApplicationPlatformEventKind,
-    PointerButton as ApplicationPointerButton, Timestamp as ApplicationTimestamp,
-    WindowEvent as ApplicationWindowEvent, WindowHandle as ApplicationWindowHandle,
+    FileSystem as ApplicationFileSystem, PlatformEvent as ApplicationPlatformEvent,
+    PlatformEventKind as ApplicationPlatformEventKind, Timestamp as ApplicationTimestamp,
+    WindowConfig as ApplicationWindowConfig, WindowError as ApplicationWindowError,
 };
 
 /// Platform backend available to the running application.
@@ -154,8 +154,109 @@ impl ApplicationPlatform {
     }
 
     /// Drain normalized platform events into the caller's reusable buffer.
-    pub fn poll_events(&self, output: &mut Vec<ApplicationPlatformEvent>) {
-        self.inner.poll_events(output);
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApplicationWindowError`] if called from a thread other than
+    /// the one that owns the native window system.
+    pub fn poll_events(
+        &self,
+        output: &mut Vec<ApplicationPlatformEvent>,
+    ) -> Result<(), ApplicationWindowError> {
+        self.inner.poll_events(output)
+    }
+
+    /// Create a native game window through Nord's platform facade.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApplicationWindowError`] for invalid dimensions, unsupported
+    /// backends, wrong-thread access, or native creation failures.
+    pub fn create_window(
+        &self,
+        config: &ApplicationWindowConfig,
+    ) -> Result<ApplicationWindowHandle, ApplicationWindowError> {
+        self.inner.create_window(config)
+    }
+
+    /// Explicitly destroy a window created by this platform instance.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApplicationWindowError`] if the handle is unknown, the caller
+    /// is on the wrong thread, or native destruction fails.
+    pub fn destroy_window(
+        &self,
+        handle: ApplicationWindowHandle,
+    ) -> Result<(), ApplicationWindowError> {
+        self.inner.destroy_window(handle)
+    }
+
+    /// Show or hide a game window through the application platform facade.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApplicationWindowError`] for unknown handles, wrong-thread
+    /// access, or unsupported native backends.
+    pub fn set_window_visible(
+        &self,
+        handle: ApplicationWindowHandle,
+        visible: bool,
+    ) -> Result<(), ApplicationWindowError> {
+        self.inner.set_window_visible(handle, visible)
+    }
+
+    pub(crate) fn native_window_handle(
+        &self,
+        handle: ApplicationWindowHandle,
+    ) -> Result<raw_window_handle::RawWindowHandle, ApplicationWindowError> {
+        self.inner.native_window_handle(handle)
+    }
+
+    /// Access monitor enumeration and display-layout queries.
+    #[must_use]
+    pub fn display_manager(&self) -> ApplicationDisplayManager<'_> {
+        ApplicationDisplayManager { inner: self.inner.displays() }
+    }
+}
+
+/// Stable application facade for querying connected displays.
+pub struct ApplicationDisplayManager<'a> {
+    inner: &'a nord_platform::DisplayManager,
+}
+
+impl ApplicationDisplayManager<'_> {
+    /// Enumerate current monitors as a fresh snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApplicationDisplayError`] if the backend cannot enumerate displays.
+    pub fn monitors(&self) -> Result<Vec<ApplicationDisplayMonitor>, ApplicationDisplayError> {
+        self.inner.monitors()
+    }
+
+    /// Return the primary monitor, if one is currently available.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApplicationDisplayError`] if native enumeration fails.
+    pub fn primary_monitor(
+        &self,
+    ) -> Result<Option<ApplicationDisplayMonitor>, ApplicationDisplayError> {
+        self.inner.primary_monitor()
+    }
+
+    /// Find the monitor containing a virtual desktop point, in pixels.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApplicationDisplayError`] if native enumeration fails.
+    pub fn monitor_at(
+        &self,
+        x: i32,
+        y: i32,
+    ) -> Result<Option<ApplicationDisplayMonitor>, ApplicationDisplayError> {
+        self.inner.monitor_at(x, y)
     }
 }
 
