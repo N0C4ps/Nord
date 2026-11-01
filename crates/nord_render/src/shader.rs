@@ -339,6 +339,12 @@ fn parse_bindings(dump: &str) -> Result<Vec<ShaderResourceBinding>, ShaderCompil
         }
         let line = line.trim().trim_start_matches(';').trim();
         if line.is_empty() {
+            // DXC emits comment-only separator rows before the table header.
+            // Keep scanning until at least one binding has been parsed; after
+            // that, the blank separator marks the end of the table.
+            if bindings.is_empty() {
+                continue;
+            }
             break;
         }
         if line.starts_with("Name ") || line.starts_with("---") {
@@ -426,6 +432,32 @@ fn find_windows_sdk_dxc() -> Option<OsString> {
         .map(|version| version.join("x64").join("dxc.exe"))
         .find(|candidate| candidate.is_file())
         .map(PathBuf::into_os_string)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ShaderBindingKind, parse_bindings};
+
+    #[test]
+    fn parses_dxc_resource_table_after_comment_separators() {
+        let dump = "\
+; Resource Bindings:
+;
+; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
+; ------------------------------ ---------- ------- ----------- ------- -------------- ------
+; CameraData                        cbuffer      NA          NA     CB0            cb0     1
+;
+; ViewId state:
+";
+
+        let bindings = parse_bindings(dump).expect("DXC resource table should parse");
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].name, "CameraData");
+        assert_eq!(bindings[0].kind, ShaderBindingKind::ConstantBuffer);
+        assert_eq!(bindings[0].register, 0);
+        assert_eq!(bindings[0].space, 0);
+        assert_eq!(bindings[0].count, 1);
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
