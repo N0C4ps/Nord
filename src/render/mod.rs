@@ -1,19 +1,19 @@
+mod material;
+
+use self::material::{BasicOpaqueMaterial, BasicOpaqueMaterialDesc};
 use crate::camera::GameCameraController;
 use nord_app::{
     ApplicationBufferDesc, ApplicationBufferMemory, ApplicationBufferUsage, ApplicationClearColor,
-    ApplicationColorAttachmentBinding, ApplicationCompiledShader, ApplicationDescriptorHandle,
-    ApplicationDiagnosticError, ApplicationErrorContext, ApplicationGraphicsPipelineDesc,
-    ApplicationPipelineDescriptorBinding, ApplicationPlatform, ApplicationRenderConfig,
-    ApplicationRenderQueue, ApplicationRenderTargetDesc, ApplicationRenderer,
-    ApplicationResourceUsage, ApplicationShaderBindingKind, ApplicationShaderCompileOptions,
-    ApplicationShaderCompiler, ApplicationShaderStage, ApplicationTextureFormat,
-    ApplicationVertexAttribute, ApplicationVertexBufferBinding, ApplicationVertexFormat,
-    ApplicationViewport, ApplicationWindowHandle,
+    ApplicationColorAttachmentBinding, ApplicationDescriptorHandle, ApplicationDiagnosticError,
+    ApplicationErrorContext, ApplicationPipelineDescriptorBinding, ApplicationPlatform,
+    ApplicationRenderConfig, ApplicationRenderQueue, ApplicationRenderTargetDesc,
+    ApplicationRenderer, ApplicationResourceUsage, ApplicationShaderBindingKind,
+    ApplicationTextureFormat, ApplicationVertexBufferBinding, ApplicationViewport,
+    ApplicationWindowHandle,
 };
 use nord_camera::PerspectiveCamera;
 use nord_math::{Mat4, Quat, Vec3};
 use nord_mesh::{IndexedMesh, MeshVertex};
-use std::path::PathBuf;
 
 const CLEAR_COLOR: ApplicationClearColor = ApplicationClearColor::rgba(0.025, 0.035, 0.055, 1.0);
 const VERTEX_STRIDE: u32 = 24;
@@ -43,9 +43,7 @@ pub(super) struct GameRenderer {
     camera_binding: ApplicationPipelineDescriptorBinding,
     camera: GameCameraController,
     model: Mat4,
-    pipeline: ApplicationGraphicsPipelineDesc,
-    vertex_shader: ApplicationCompiledShader,
-    pixel_shader: ApplicationCompiledShader,
+    material: BasicOpaqueMaterial,
 }
 
 struct MeshGpuResources {
@@ -73,8 +71,10 @@ impl GameRenderer {
         )
         .map_err(ApplicationDiagnosticError::msg)
         .context("initializing Nord's graphics infrastructure")?;
-        let (vertex_shader, pixel_shader) = Self::compile_mesh_shaders()?;
-        let pipeline = Self::create_mesh_pipeline(&mut renderer, &vertex_shader, &pixel_shader)?;
+        let material = BasicOpaqueMaterial::load(
+            &mut renderer,
+            BasicOpaqueMaterialDesc::new([0.12, 0.66, 0.88])?,
+        )?;
         let mesh = make_test_cube()?;
         let mesh_gpu = Self::upload_test_mesh(&mut renderer, &mesh)?;
         let (camera_buffer, camera_binding) = Self::create_camera_buffer(&mut renderer)?;
@@ -106,75 +106,8 @@ impl GameRenderer {
             camera_binding,
             camera,
             model,
-            pipeline,
-            vertex_shader,
-            pixel_shader,
+            material,
         })
-    }
-
-    fn compile_mesh_shaders()
-    -> nord_app::ApplicationResult<(ApplicationCompiledShader, ApplicationCompiledShader)> {
-        let shader_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("assets")
-            .join("shaders")
-            .join("nord_mesh_preview.hlsl");
-        let compiler = ApplicationShaderCompiler::default();
-        let vertex = compiler
-            .compile(&ApplicationShaderCompileOptions::new(
-                &shader_path,
-                ApplicationShaderStage::Vertex,
-                "VSMain",
-            ))
-            .map_err(ApplicationDiagnosticError::msg)
-            .context("compiling the game's 3D mesh vertex shader")?;
-        let pixel = compiler
-            .compile(&ApplicationShaderCompileOptions::new(
-                &shader_path,
-                ApplicationShaderStage::Pixel,
-                "PSMain",
-            ))
-            .map_err(ApplicationDiagnosticError::msg)
-            .context("compiling the game's 3D mesh pixel shader")?;
-        Ok((vertex, pixel))
-    }
-
-    fn create_mesh_pipeline(
-        renderer: &mut ApplicationRenderer,
-        vertex: &ApplicationCompiledShader,
-        pixel: &ApplicationCompiledShader,
-    ) -> nord_app::ApplicationResult<ApplicationGraphicsPipelineDesc> {
-        let mut pipeline = ApplicationGraphicsPipelineDesc::new(
-            vertex.shader_id,
-            pixel.shader_id,
-            ApplicationTextureFormat::Rgba8Unorm,
-        );
-        pipeline.depth_format = Some(ApplicationTextureFormat::D32Float);
-        pipeline.depth_test = true;
-        pipeline.depth_write = true;
-        pipeline = pipeline
-            .with_vertex_attribute(ApplicationVertexAttribute {
-                semantic: "POSITION".into(),
-                semantic_index: 0,
-                format: ApplicationVertexFormat::Float3,
-                input_slot: 0,
-                byte_offset: 0,
-                per_instance: false,
-                instance_step_rate: 0,
-            })
-            .with_vertex_attribute(ApplicationVertexAttribute {
-                semantic: "NORMAL".into(),
-                semantic_index: 0,
-                format: ApplicationVertexFormat::Float3,
-                input_slot: 0,
-                byte_offset: 12,
-                per_instance: false,
-                instance_step_rate: 0,
-            });
-        renderer
-            .create_graphics_pipeline(&pipeline, vertex, pixel, 1)
-            .map_err(ApplicationDiagnosticError::msg)
-            .context("creating the game's depth-tested mesh pipeline")?;
-        Ok(pipeline)
     }
 
     fn upload_test_mesh(
@@ -287,10 +220,12 @@ impl GameRenderer {
         let index_buffer_size = self.index_buffer_size;
         let camera_buffer = self.camera_buffer;
         let camera_binding = self.camera_binding;
+        let material_constants = self.material.constants_resource();
         let index_count = self.index_count;
-        let pipeline = self.pipeline.clone();
-        let vertex_shader = self.vertex_shader.clone();
-        let pixel_shader = self.pixel_shader.clone();
+        let pipeline = self.material.pipeline().clone();
+        let vertex_shader = self.material.vertex_shader().clone();
+        let pixel_shader = self.material.pixel_shader().clone();
+        let material_binding = self.material.binding();
         let view_projection = self
             .camera
             .camera()
@@ -313,7 +248,8 @@ impl GameRenderer {
                     .use_resource(surface.depth, ApplicationResourceUsage::DepthAttachmentWrite)
                     .use_resource(vertex_buffer, ApplicationResourceUsage::VertexBufferRead)
                     .use_resource(index_buffer, ApplicationResourceUsage::IndexBufferRead)
-                    .use_resource(camera_buffer, ApplicationResourceUsage::ConstantBufferRead),
+                    .use_resource(camera_buffer, ApplicationResourceUsage::ConstantBufferRead)
+                    .use_resource(material_constants, ApplicationResourceUsage::ConstantBufferRead),
                 move |encoder| {
                     encoder.begin_graphics_pass_with_attachments(
                         &[ApplicationColorAttachmentBinding {
@@ -330,7 +266,7 @@ impl GameRenderer {
                         &pipeline,
                         &vertex_shader,
                         &pixel_shader,
-                        &[camera_binding],
+                        &[camera_binding, material_binding],
                         &[ApplicationVertexBufferBinding {
                             slot: 0,
                             buffer: vertex_buffer,
@@ -435,6 +371,7 @@ impl GameRenderer {
             .wait_idle()
             .map_err(ApplicationDiagnosticError::msg)
             .context("waiting for graphics work before game renderer shutdown")?;
+        self.material.shutdown(&mut renderer)?;
         for resource in [
             self.surface.color,
             self.surface.depth,
