@@ -4,10 +4,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const SHADER_SOURCE: &str = "assets/shaders/nord_pbr_forward.hlsl";
+const SHADOW_SHADER_SOURCE: &str = "assets/shaders/nord_directional_shadow.hlsl";
 
 fn main() {
     println!("cargo:rerun-if-changed=nord.exe.manifest");
     println!("cargo:rerun-if-changed={SHADER_SOURCE}");
+    println!("cargo:rerun-if-changed={SHADOW_SHADER_SOURCE}");
     for variable in ["NORD_DXC_PATH", "DXC_PATH", "ProgramFiles(x86)"] {
         println!("cargo:rerun-if-env-changed={variable}");
     }
@@ -46,19 +48,58 @@ fn compile_game_shaders() {
         &shader_path,
         shader_directory,
         &output_directory,
-        "VSMain",
-        "vs_6_0",
-        "vs",
+        ShaderStageSpec {
+            artifact_name: "nord_pbr_forward",
+            entry: "VSMain",
+            profile: "vs_6_0",
+            stage: "vs",
+        },
     );
     compile_stage(
         &dxc,
         &shader_path,
         shader_directory,
         &output_directory,
-        "PSMain",
-        "ps_6_0",
-        "ps",
+        ShaderStageSpec {
+            artifact_name: "nord_pbr_forward",
+            entry: "PSMain",
+            profile: "ps_6_0",
+            stage: "ps",
+        },
     );
+    let shadow_shader = manifest_dir.join(SHADOW_SHADER_SOURCE);
+    compile_stage(
+        &dxc,
+        &shadow_shader,
+        shader_directory,
+        &output_directory,
+        ShaderStageSpec {
+            artifact_name: "nord_directional_shadow",
+            entry: "VSMain",
+            profile: "vs_6_0",
+            stage: "vs",
+        },
+    );
+    compile_stage(
+        &dxc,
+        &shadow_shader,
+        shader_directory,
+        &output_directory,
+        ShaderStageSpec {
+            artifact_name: "nord_directional_shadow",
+            entry: "PSMain",
+            profile: "ps_6_0",
+            stage: "ps",
+        },
+    );
+}
+
+#[derive(Clone, Copy)]
+struct ShaderStageSpec<'a> {
+    artifact_name: &'a str,
+    entry: &'a str,
+    profile: &'a str,
+    stage: &'a str,
 }
 
 fn compile_stage(
@@ -66,13 +107,12 @@ fn compile_stage(
     shader: &Path,
     include_directory: &Path,
     output_directory: &Path,
-    entry: &str,
-    profile: &str,
-    stage: &str,
+    spec: ShaderStageSpec<'_>,
 ) {
-    let bytecode = output_directory.join(format!("nord_pbr_forward.{stage}.dxil"));
-    let reflection = output_directory.join(format!("nord_pbr_forward.{stage}.reflection"));
-    let disassembly = output_directory.join(format!("nord_pbr_forward.{stage}.asm"));
+    let ShaderStageSpec { artifact_name, entry, profile, stage } = spec;
+    let bytecode = output_directory.join(format!("{artifact_name}.{stage}.dxil"));
+    let reflection = output_directory.join(format!("{artifact_name}.{stage}.reflection"));
+    let disassembly = output_directory.join(format!("{artifact_name}.{stage}.asm"));
     let mut command = Command::new(dxc);
     command
         .arg(shader)
@@ -94,14 +134,16 @@ fn compile_stage(
         .unwrap_or_else(|error| panic!("could not start DXC at {}: {error}", dxc.display()));
     assert!(
         output.status.success(),
-        "DXC failed compiling {stage} shader (status {:?}):\n{}{}",
+        "DXC failed compiling {} shader (status {:?}):\n{}{}",
+        stage,
         output.status.code(),
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     if !output.stderr.is_empty() {
         println!(
-            "cargo:warning=DXC {stage} shader diagnostics: {}",
+            "cargo:warning=DXC {} shader diagnostics: {}",
+            stage,
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }

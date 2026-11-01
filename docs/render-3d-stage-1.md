@@ -27,13 +27,15 @@ e apresentação pela infraestrutura gráfica da Nord.
 1. A câmera calcula `projection * view`; o jogo combina isso com `model`.
 2. O jogo envia os vértices e índices da malha para buffers device-local.
 3. Um buffer de constantes upload, alinhado a 256 bytes, recebe model,
-   view-projection, normal matrix e posição da câmera em `b0`. O material envia
-   fatores lineares metallic-roughness em `b1` e liga base color, metallic-
-   roughness, normal map e sampler nos slots refletidos `t0..t2/s0`.
-4. O render graph declara color, depth, vertex, index, constants e leituras
-   amostradas dos três mapas.
-5. O passe limpa color e depth, executa um draw indexado e apresenta a textura
-   colorida pela swapchain.
+   view-projection, normal matrix, posição da câmera e matriz da luz em `b0`.
+   O material envia fatores metallic-roughness em `b1` e liga base color,
+   metallic-roughness, normal, mapa de sombras e sampler nos slots
+   `t0..t3/s0`.
+4. O render graph declara o passe da sombra direcional antes do passe PBR. O
+   primeiro usa o frustum da luz e escreve os alvos da sombra; o segundo lê a
+   textura de profundidade, além dos três mapas de material.
+5. Os passes limpam seus alvos, executam draws indexados instanciados e o jogo
+   apresenta a textura colorida pela swapchain.
 6. Ao mudar o tamanho da janela, o jogo recria os attachments e atualiza o
    aspect ratio da câmera. Uma superfície minimizada não é renderizada.
 
@@ -55,10 +57,10 @@ de Schlick para a resposta especular. `roughness` perceptual é elevada ao
 quadrado para formar `alpha`; metallic reduz a parcela difusa e colore `F0`,
 com `0.04` para dielétricos. A iluminação inicial tem uma luz direcional e um
 preenchimento difuso hemisférico baixo; isso mantém o protótipo legível, mas
-ainda não é IBL, ambiente HDR, sombras, múltiplas luzes ou iluminação de
-produção. Radiância linear passa por tone mapping ACES e conversão linear→sRGB
-no pixel shader porque o alvo atual é `Rgba8Unorm` e a apresentação copia os
-bytes ao backbuffer.
+ainda não é IBL, ambiente HDR, múltiplas luzes ou iluminação de produção.
+Sombras da luz direcional são descritas adiante. Radiância linear passa por
+tone mapping ACES e conversão linear→sRGB no pixel shader porque o alvo atual
+é `Rgba8Unorm` e a apresentação copia os bytes ao backbuffer.
 
 O pipeline continua opaco, com blending desligado, profundidade `D32Float` e
 sampler anisotrópico repeat. `assets/shaders/nord_pbr_forward.hlsl` é asset do
@@ -122,6 +124,31 @@ grupos; integração posterior de meshes e materiais deve fornecer seus próprio
 buffers/pipelines antes de habilitar essas chaves na cena. Não há occlusion
 culling nesta etapa.
 
+## Sombras direcionais
+
+O jogo registra dois passes no render graph por frame:
+
+1. `Nord directional shadow depth` renderiza a cena pela matriz ortográfica da
+   luz, usando o mesmo mesh indexado e o buffer de instâncias. O D32 faz o
+   teste da superfície mais próxima; o passe também grava a profundidade
+   normalizada em um alvo R32 amostrável.
+2. `Nord metallic-roughness PBR mesh` declara leitura amostrável desse mapa e
+   aplica uma comparação PCF 3×3 ao termo de luz direcional. A luz ambiente
+   permanece sem sombras nesta etapa.
+
+A visibilidade do passe de sombra é calculada com o frustum da luz, separado do
+frustum da câmera. O mapa tem 2048² texels e uma projeção ortográfica que cobre
+a cena de demonstração; coordenadas fora do mapa são consideradas iluminadas.
+O shader aplica viés de profundidade dependente do ângulo e limita cada toque
+do PCF à borda útil do mapa. D32 e R32 são alvos distintos porque o contrato
+atual da pipeline gráfica requer um alvo de cor; o R32 funciona como a textura
+escalar de profundidade lida pelo passe PBR.
+
+Esta etapa cobre a cena de demonstração com uma única luz direcional. Cascatas,
+ajuste do mapa a limites dinâmicos do mundo, textura de profundidade amostrável
+nativa e bias por derivadas são evoluções para mundos maiores, câmeras distantes
+e maior qualidade de sombra.
+
 ## Referências técnicas
 
 - Microsoft, [Direct3D transformation pipeline](https://learn.microsoft.com/en-us/windows/win32/dxtecharts/the-direct3d-transformation-pipeline): transformações world/view/projection, clip space homogêneo e viewport.
@@ -131,6 +158,9 @@ culling nesta etapa.
 - Microsoft, [D3D12 root signatures](https://learn.microsoft.com/en-us/windows/win32/direct3d12/creating-root-signature): descriptors e bindings refletidos pelo shader.
 - Microsoft, [Managing Graphics Pipeline State in Direct3D 12](https://learn.microsoft.com/en-us/windows/win32/direct3d12/managing-graphics-pipeline-state-in-direct3d-12): blend, rasterizer, depth/stencil e shaders como estado imutável do pipeline.
 - Microsoft, [`D3D12_DEPTH_STENCIL_DESC`](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/ns-d3d12-d3d12_depth_stencil_desc): ativação do teste, escrita e comparação de profundidade.
+- Microsoft, [Render the shadow map to the depth buffer](https://learn.microsoft.com/en-us/windows/uwp/gaming/render-the-shadow-map-to-the-depth-buffer): renderizar da perspectiva da luz para produzir o mapa de profundidade de sombra.
+- Microsoft, [Render the scene with depth testing](https://learn.microsoft.com/en-us/windows/uwp/gaming/render-the-scene-with-depth-testing): comparar a profundidade em espaço da luz com o mapa de sombras durante o passe de cena.
+- Microsoft, [Cascaded Shadow Maps](https://learn.microsoft.com/en-us/windows/desktop/DxTechArts/cascaded-shadow-maps): PCF, amostragem da vizinhança e tradeoffs de depth bias.
 - Microsoft, [Shader Constants (HLSL)](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-constants): layout e bindings dos constant buffers usados por câmera e material.
 - Khronos, [glTF 2.0 — Metallic-Roughness Material](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#metallic-roughness-material): fatores lineares, transferência sRGB da base color e canais G/B do mapa metallic-roughness.
 - Khronos, [glTF 2.0 — BRDF implementation](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#appendix-b-brdf-implementation): GGX, Fresnel, diffuse/specular e convenções de roughness.
