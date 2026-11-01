@@ -179,6 +179,16 @@ impl Platform {
         self.windows.set_visible(handle, visible)
     }
 
+    /// Lock or release a window's pointer capture through the native backend.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WindowError`] for wrong-thread access, unknown handles,
+    /// unsupported backends, or native failures.
+    pub fn set_cursor_locked(&self, handle: WindowHandle, locked: bool) -> Result<(), WindowError> {
+        self.windows.set_cursor_locked(handle, locked)
+    }
+
     /// Integration hook used by `nord_app` to bind a graphics surface to a window.
     #[doc(hidden)]
     pub fn native_window_handle(

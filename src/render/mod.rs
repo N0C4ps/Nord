@@ -380,12 +380,12 @@ impl GameRenderer {
     pub(super) fn handle_input(
         &mut self,
         event: &nord_app::ApplicationInputEvent,
-    ) -> nord_app::ApplicationResult<()> {
+    ) -> nord_app::ApplicationResult<crate::camera::GameCursorAction> {
         self.camera.handle_input(event)
     }
 
-    pub(super) fn reset_pointer_tracking(&mut self) {
-        self.camera.reset_pointer_tracking();
+    pub(super) fn handle_window_focus(&mut self, focused: bool) -> crate::camera::GameCursorAction {
+        self.camera.handle_window_focus(focused)
     }
 
     pub(super) fn resize(&mut self, width: u32, height: u32) -> nord_app::ApplicationResult<()> {

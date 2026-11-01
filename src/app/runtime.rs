@@ -1,8 +1,9 @@
 use crate::gameloop::GameLoop;
 use crate::render::GameRenderer;
 use nord_app::{
-    ApplicationErrorContext, ApplicationEvent, ApplicationEventSystem, ApplicationInputSystem,
-    ApplicationPlatform, ApplicationPlatformEventKind, ApplicationResult, ApplicationWindowEvent,
+    ApplicationDiagnosticError, ApplicationErrorContext, ApplicationEvent, ApplicationEventSystem,
+    ApplicationInputSystem, ApplicationPlatform, ApplicationPlatformEventKind, ApplicationResult,
+    ApplicationWindowEvent,
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -78,7 +79,7 @@ impl ApplicationRuntime {
             renderer.wait_for_frame()?;
             self.events.clear();
             platform.poll_events(&mut self.events).context("pumping native window messages")?;
-            self.dispatch_platform_events(event_system, input_system, renderer)?;
+            self.dispatch_platform_events(platform, event_system, input_system, renderer)?;
 
             if let Some(reason) = self.requested_shutdown() {
                 return Ok(reason);
@@ -93,6 +94,7 @@ impl ApplicationRuntime {
 
     fn dispatch_platform_events(
         &self,
+        platform: &ApplicationPlatform,
         event_system: &ApplicationEventSystem,
         input_system: &ApplicationInputSystem,
         renderer: &mut GameRenderer,
@@ -108,9 +110,12 @@ impl ApplicationRuntime {
                     if let ApplicationWindowEvent::Resized { width, height } = event {
                         renderer.resize(*width, *height)?;
                     }
-                    if matches!(event, ApplicationWindowEvent::FocusChanged { focused: false }) {
-                        Self::report_input_dispatch(input_system.release_window(*window));
-                        renderer.reset_pointer_tracking();
+                    if let ApplicationWindowEvent::FocusChanged { focused } = event {
+                        let action = renderer.handle_window_focus(*focused);
+                        Self::apply_cursor_action(platform, *window, action)?;
+                        if !focused {
+                            Self::report_input_dispatch(input_system.release_window(*window));
+                        }
                     }
                     let application_event =
                         ApplicationEvent::Window { window: *window, event: event.clone() };
@@ -118,12 +123,32 @@ impl ApplicationRuntime {
                 }
                 ApplicationPlatformEventKind::Input(input) => {
                     Self::report_input_dispatch(input_system.ingest(input));
-                    renderer.handle_input(input)?;
+                    let action = renderer.handle_input(input)?;
+                    Self::apply_cursor_action(platform, input.window(), action)?;
                 }
                 _ => {}
             }
         }
         Ok(())
+    }
+
+    fn apply_cursor_action(
+        platform: &ApplicationPlatform,
+        window: nord_app::ApplicationWindowHandle,
+        action: crate::camera::GameCursorAction,
+    ) -> ApplicationResult<()> {
+        let locked = match action {
+            crate::camera::GameCursorAction::None => return Ok(()),
+            crate::camera::GameCursorAction::Lock => true,
+            crate::camera::GameCursorAction::Unlock => false,
+        };
+        platform.set_cursor_locked(window, locked).map_err(ApplicationDiagnosticError::msg).context(
+            if locked {
+                "locking the game pointer for first-person camera control"
+            } else {
+                "releasing the game pointer"
+            },
+        )
     }
 
     fn requested_shutdown(&self) -> Option<ShutdownReason> {

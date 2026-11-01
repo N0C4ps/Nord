@@ -30,11 +30,14 @@ e apresentação pela infraestrutura gráfica da Nord.
 6. Ao mudar o tamanho da janela, o jogo recria os attachments e atualiza o
    aspect ratio da câmera. Uma superfície minimizada não é renderizada.
 
-Enquanto o cursor se move dentro da janela do jogo, os deltas de pixel giram a
-câmera. O primeiro evento após iniciar ou recuperar o foco só estabelece a
-posição de referência, evitando um salto; o pitch é limitado antes de chegar à
-singularidade vertical. A rotação usa deltas do mouse e não depende do delta
-time do frame.
+O foco da janela, sozinho, não captura o mouse. Um clique primário dentro da
+janela focada ativa o modo de primeira pessoa: o backend Win32 esconde e mantém
+o cursor no centro da área cliente, restringe-o à janela e entrega movimento
+relativo via Raw Input. `Esc` restaura o cursor à posição anterior; perder foco
+ou destruir a janela também libera captura. `src/camera.rs` decide quando
+capturar e converte deltas em rotação, sem dependência direta entre
+`nord_inputs`, `nord_camera` e `nord_render`. O pitch é limitado antes da
+singularidade vertical e a rotação independe do delta time do frame.
 
 O cubo usa escala uniforme e rotação, portanto transformar normais com a parte
 3×3 do modelo é válido nesta demonstração. Escala não uniforme exigirá matriz
@@ -46,3 +49,5 @@ normal inversa-transposta antes de virar uma capacidade geral de mesh rendering.
 - Microsoft, [`DrawIndexedInstanced`](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12graphicscommandlist-drawindexedinstanced): parâmetros do draw indexado e leitura do index buffer.
 - Microsoft, [`CreateDepthStencilView`](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12device-createdepthstencilview): criação do DSV do recurso depth.
 - Microsoft, [D3D12 root signatures](https://learn.microsoft.com/en-us/windows/win32/direct3d12/creating-root-signature): descriptors e bindings refletidos pelo shader.
+- Microsoft, [Raw Input overview](https://learn.microsoft.com/en-us/windows/win32/inputdev/raw-input) e [Using Raw Input](https://learn.microsoft.com/en-us/windows/win32/inputdev/using-raw-input): recebimento de deltas de dispositivo via `WM_INPUT` e leitura com `GetRawInputData`.
+- Microsoft, [`ClipCursor`](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-clipcursor): confinamento e liberação explícita do cursor ao alternar o modo de captura.
