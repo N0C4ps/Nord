@@ -154,6 +154,10 @@ e maior qualidade de sombra.
 
 ## Referências técnicas
 
+Para algoritmo, comparação medida entre frustum-only e Hi-Z, estabilidade da
+imagem e decisão sobre manter forward ou avaliar deferred, veja
+[Occlusion culling and render path comparison](render-occlusion-and-paths.md).
+
 - Microsoft, [Direct3D transformation pipeline](https://learn.microsoft.com/en-us/windows/win32/dxtecharts/the-direct3d-transformation-pipeline): transformações world/view/projection, clip space homogêneo e viewport.
 - Microsoft, [`DrawIndexedInstanced`](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12graphicscommandlist-drawindexedinstanced): parâmetros do draw indexado e leitura do index buffer.
 - Microsoft, [Indirect drawing and GPU culling](https://learn.microsoft.com/en-us/windows/win32/direct3d12/indirect-drawing-and-gpu-culling-): produzir e consumir comandos indiretos com compute shaders.

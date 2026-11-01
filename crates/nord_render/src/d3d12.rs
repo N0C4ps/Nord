@@ -2342,6 +2342,151 @@ impl D3d12Renderer {
         Ok(pixel)
     }
 
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn read_texture_rgba8(
+        &mut self,
+        handle: GpuResourceHandle,
+    ) -> Result<(u32, u32, Vec<u8>), RenderError> {
+        let slot = self.validate_resource(handle)?;
+        let width = u32::try_from(slot.desc.Width).map_err(backend_error)?;
+        let height = slot.desc.Height;
+        if !matches!(slot.kind, ResourceKind::RenderTarget | ResourceKind::Texture)
+            || slot.desc.Format != DXGI_FORMAT_R8G8B8A8_UNORM
+            || slot.desc.SampleDesc.Count != 1
+        {
+            return Err(RenderError::Backend(
+                "RGBA8 readback requires a single-sample RGBA8 texture".into(),
+            ));
+        }
+        let texture = slot.resource.as_ref().expect("validated RGBA8 texture").clone();
+        let state = slot.state;
+        let texture_desc = slot.desc;
+        let mut footprint = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
+        let mut rows = 0;
+        let mut row_size = 0u64;
+        let mut total_bytes = 0u64;
+        // SAFETY: the live texture and subresource zero are valid for this query.
+        unsafe {
+            self.device.GetCopyableFootprints(
+                &raw const texture_desc,
+                0,
+                1,
+                0,
+                Some(&raw mut footprint),
+                Some(&raw mut rows),
+                Some(&raw mut row_size),
+                Some(&raw mut total_bytes),
+            );
+        }
+        let tight_row_bytes = u64::from(width) * 4;
+        if rows != height || row_size < tight_row_bytes || total_bytes == 0 {
+            return Err(RenderError::Backend(
+                "D3D12 returned an invalid RGBA8 readback footprint".into(),
+            ));
+        }
+        let heap = D3D12_HEAP_PROPERTIES {
+            Type: D3D12_HEAP_TYPE_READBACK,
+            CPUPageProperty: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+            MemoryPoolPreference: D3D12_MEMORY_POOL_UNKNOWN,
+            CreationNodeMask: 1,
+            VisibleNodeMask: 1,
+        };
+        let readback_desc = D3D12_RESOURCE_DESC {
+            Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+            Alignment: 0,
+            Width: total_bytes,
+            Height: 1,
+            DepthOrArraySize: 1,
+            MipLevels: 1,
+            Format: DXGI_FORMAT_UNKNOWN,
+            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+            Flags: D3D12_RESOURCE_FLAG_NONE,
+        };
+        let mut readback = None;
+        // SAFETY: D3D12 readback buffers require a readback heap and COPY_DEST state.
+        unsafe {
+            self.device.CreateCommittedResource::<ID3D12Resource>(
+                &raw const heap,
+                D3D12_HEAP_FLAG_NONE,
+                &raw const readback_desc,
+                D3D12_RESOURCE_STATE_COPY_DEST,
+                None,
+                &raw mut readback,
+            )
+        }
+        .map_err(backend_error)?;
+        let readback = readback.ok_or_else(|| {
+            RenderError::Backend("D3D12 returned an empty texture readback buffer".into())
+        })?;
+        self.wait_idle()?;
+        let allocator: ID3D12CommandAllocator =
+            unsafe { self.device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT) }
+                .map_err(backend_error)?;
+        let list: ID3D12GraphicsCommandList = unsafe {
+            self.device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator, None)
+        }
+        .map_err(backend_error)?;
+        if state != D3D12_RESOURCE_STATE_COPY_SOURCE {
+            record_transition(&list, &texture, state, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        }
+        let mut destination = D3D12_TEXTURE_COPY_LOCATION {
+            pResource: ManuallyDrop::new(Some(readback.clone())),
+            Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+            Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { PlacedFootprint: footprint },
+        };
+        let mut source = D3D12_TEXTURE_COPY_LOCATION {
+            pResource: ManuallyDrop::new(Some(texture.clone())),
+            Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+            Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { SubresourceIndex: 0 },
+        };
+        // SAFETY: the footprint was queried for this exact texture description.
+        unsafe {
+            list.CopyTextureRegion(&raw const destination, 0, 0, 0, &raw const source, None);
+            ManuallyDrop::drop(&mut destination.pResource);
+            ManuallyDrop::drop(&mut source.pResource);
+            if state != D3D12_RESOURCE_STATE_COPY_SOURCE {
+                record_transition(&list, &texture, D3D12_RESOURCE_STATE_COPY_SOURCE, state);
+            }
+            list.Close().map_err(backend_error)?;
+        }
+        self.execute_and_wait(&list)?;
+
+        let total_bytes = usize::try_from(total_bytes).map_err(backend_error)?;
+        let row_pitch = usize::try_from(footprint.Footprint.RowPitch).map_err(backend_error)?;
+        let tight_row_bytes = usize::try_from(tight_row_bytes).map_err(backend_error)?;
+        let pixel_count = usize::try_from(width)
+            .ok()
+            .and_then(|width| {
+                usize::try_from(height).ok().and_then(|height| width.checked_mul(height))
+            })
+            .ok_or_else(|| RenderError::Backend("RGBA8 pixel count overflowed".into()))?;
+        let mut pixels = vec![
+            0_u8;
+            pixel_count.checked_mul(4).ok_or_else(|| {
+                RenderError::Backend("RGBA8 image byte count overflowed".into())
+            })?
+        ];
+        // SAFETY: mapping covers the full placed footprint and the queue fence has completed.
+        unsafe {
+            let mut mapped = std::ptr::null_mut();
+            readback
+                .Map(0, Some(&D3D12_RANGE { Begin: 0, End: total_bytes }), Some(&raw mut mapped))
+                .map_err(backend_error)?;
+            for row in 0..height as usize {
+                let source_offset = row * row_pitch;
+                let destination_offset = row * tight_row_bytes;
+                std::ptr::copy_nonoverlapping(
+                    mapped.cast::<u8>().add(source_offset),
+                    pixels.as_mut_ptr().add(destination_offset),
+                    tight_row_bytes,
+                );
+            }
+            readback.Unmap(0, Some(&D3D12_RANGE { Begin: 0, End: 0 }));
+        }
+        Ok((width, height, pixels))
+    }
+
     pub(crate) fn apply_graph_barriers(
         &mut self,
         barriers: &[RenderBarrier],
