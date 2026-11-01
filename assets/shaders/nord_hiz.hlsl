@@ -17,13 +17,13 @@ void CSBuild(uint3 dispatchThreadId : SV_DispatchThreadID)
         return;
     }
 
-    const uint2 firstSource = destination * 2;
+    const uint2 firstSource = destination * 4;
     float farthestDepth = 0.0;
     [unroll]
-    for (uint y = 0; y < 2; ++y)
+    for (uint y = 0; y < 4; ++y)
     {
         [unroll]
-        for (uint x = 0; x < 2; ++x)
+        for (uint x = 0; x < 4; ++x)
         {
             const uint2 source = firstSource + uint2(x, y);
             if (source.x < sourceWidth && source.y < sourceHeight)

@@ -102,6 +102,11 @@ impl GameCameraController {
         }
     }
 
+    /// Reconcile the game-owned state when the native platform rejects capture.
+    pub(crate) fn handle_cursor_capture_failure(&mut self) {
+        self.cursor_locked = false;
+    }
+
     #[cfg(test)]
     #[must_use]
     const fn cursor_locked(&self) -> bool {

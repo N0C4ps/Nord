@@ -302,10 +302,11 @@ impl GpuDrivenCulling {
         queue: &mut ApplicationRenderQueue,
         hiz_resources: &[ApplicationGpuResourceHandle],
         hiz_views: &[ApplicationDescriptorHandle],
+        mip_count: u32,
     ) -> nord_app::ApplicationResult<()> {
-        if hiz_resources.len() != hiz_views.len() {
+        if hiz_resources.len() != mip_count as usize || hiz_views.len() != 15 {
             return Err(ApplicationDiagnosticError::msg(
-                "Hi-Z resource and descriptor counts do not match",
+                "Hi-Z active mip resources and fixed descriptor table do not match",
             ));
         }
         let pipeline = self.hiz_pipeline;
