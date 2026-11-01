@@ -110,6 +110,7 @@ impl ApplicationRuntime {
                     }
                     if matches!(event, ApplicationWindowEvent::FocusChanged { focused: false }) {
                         Self::report_input_dispatch(input_system.release_window(*window));
+                        renderer.reset_pointer_tracking();
                     }
                     let application_event =
                         ApplicationEvent::Window { window: *window, event: event.clone() };
@@ -117,6 +118,7 @@ impl ApplicationRuntime {
                 }
                 ApplicationPlatformEventKind::Input(input) => {
                     Self::report_input_dispatch(input_system.ingest(input));
+                    renderer.handle_input(input)?;
                 }
                 _ => {}
             }
