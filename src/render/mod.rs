@@ -1,7 +1,9 @@
 mod material;
+mod shadows;
 mod visibility;
 
 use self::material::{PbrMaterial, PbrMaterialDesc};
+use self::shadows::DirectionalShadowMap;
 use self::visibility::{DrawRange, GameScene};
 use crate::camera::GameCameraController;
 use nord_app::{
@@ -20,7 +22,7 @@ use nord_mesh::{IndexedMesh, MeshVertex};
 const CLEAR_COLOR: ApplicationClearColor = ApplicationClearColor::rgba(0.025, 0.035, 0.055, 1.0);
 const VERTEX_STRIDE: u32 = 48;
 const INSTANCE_STRIDE: u32 = 24;
-const CONSTANT_BUFFER_BYTES: usize = 256;
+const CONSTANT_BUFFER_BYTES: usize = 512;
 const GAME_UV_TILE_COUNT: f32 = 2.0;
 
 /// Surface-sized game output and its depth buffer.
@@ -53,6 +55,10 @@ pub(super) struct GameRenderer {
     camera: GameCameraController,
     model: Mat4,
     material: PbrMaterial,
+    shadows: DirectionalShadowMap,
+    shadow_visibility_mask: Vec<u8>,
+    shadow_draw_ranges: Vec<DrawRange>,
+    shadow_pass_reported: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -97,6 +103,7 @@ impl GameRenderer {
             &mut renderer,
             PbrMaterialDesc::new([0.74, 0.43, 0.19], 0.92, 0.82, 0.78, 1.0)?,
         )?;
+        let shadows = DirectionalShadowMap::create(&mut renderer)?;
         let mesh = make_test_cube()?;
         let model = test_cube_transform()?;
         let mesh_gpu = Self::upload_test_mesh(&mut renderer, &mesh)?;
@@ -116,6 +123,8 @@ impl GameRenderer {
             &mut visible_mask,
             &mut draw_ranges,
         );
+        let (shadow_visibility_mask, shadow_draw_ranges, initial_shadow_metrics) =
+            initial_shadow_visibility(&scene)?;
         let allocator_stats = renderer.gpu_allocator_stats();
         nord_app::debug!(
             target: "nord::render",
@@ -129,6 +138,14 @@ impl GameRenderer {
             vertices = mesh_gpu.vertex_count,
             indices = mesh_gpu.index_count,
             "Game camera, indexed mesh, metallic-roughness material, normal map, and depth-tested pass are ready"
+        );
+        nord_app::info!(
+            name: "directional_shadow_path_initialized",
+            target: "nord::render",
+            resolution = DirectionalShadowMap::resolution(),
+            caster_instances = initial_shadow_metrics.visible_instances,
+            shadow_draw_ranges = initial_shadow_metrics.instanced_draw_calls,
+            "Directional light shadow map is configured as a depth-tested render-graph pass"
         );
         nord_app::info!(
             name: "cpu_visibility_instancing_metrics",
@@ -160,6 +177,10 @@ impl GameRenderer {
             camera,
             model,
             material,
+            shadows,
+            shadow_visibility_mask,
+            shadow_draw_ranges,
+            shadow_pass_reported: false,
         })
     }
 
@@ -301,7 +322,17 @@ impl GameRenderer {
             &mut self.visible_mask,
             &mut self.draw_ranges,
         );
+        let light_view_projection =
+            shadows::directional_light_view_projection().ok_or_else(|| {
+                ApplicationDiagnosticError::msg("directional light projection is invalid")
+            })?;
+        let _shadow_visibility_metrics = self.scene.update_visibility(
+            light_view_projection,
+            &mut self.shadow_visibility_mask,
+            &mut self.shadow_draw_ranges,
+        );
         let draw_ranges = self.draw_ranges.clone();
+        let shadow_draw_ranges = self.shadow_draw_ranges.clone();
         let normal_model =
             self.model.inverse().map(Mat4::transpose).ok_or_else(|| {
                 ApplicationDiagnosticError::msg("game object transform is singular")
@@ -311,6 +342,7 @@ impl GameRenderer {
             view_projection,
             normal_model,
             self.camera.camera().position(),
+            light_view_projection,
         );
         let renderer = self
             .renderer
@@ -320,13 +352,14 @@ impl GameRenderer {
             .write_buffer(camera_buffer, 0, &constants)
             .map_err(ApplicationDiagnosticError::msg)
             .context("updating the game's per-frame camera and model matrices")?;
-        self.submit_pbr_mesh_pass(draw_ranges)
+        self.submit_pbr_mesh_pass(draw_ranges, shadow_draw_ranges)
     }
 
     #[allow(clippy::too_many_lines)] // One render-graph pass owns its declarations, encoding and submission.
     fn submit_pbr_mesh_pass(
         &mut self,
         draw_ranges: Vec<DrawRange>,
+        shadow_draw_ranges: Vec<DrawRange>,
     ) -> nord_app::ApplicationResult<()> {
         let renderer = self
             .renderer
@@ -344,13 +377,83 @@ impl GameRenderer {
         let material_constants = self.material.constants_resource();
         let material_textures = self.material.texture_resources();
         let material_bindings = *self.material.bindings();
+        let shadow_map = self.shadows.resources();
+        let shadow_pipeline = self.shadows.pipeline().clone();
+        let shadow_vertex_shader = self.shadows.vertex_shader().clone();
+        let shadow_pixel_shader = self.shadows.pixel_shader().clone();
+        let shadow_binding = self.shadows.sampled_binding();
         let index_count = self.index_count;
         let pipeline = self.material.pipeline().clone();
         let vertex_shader = self.material.vertex_shader().clone();
         let pixel_shader = self.material.pixel_shader().clone();
         let viewport_width = exact_surface_extent(surface.width)?;
         let viewport_height = exact_surface_extent(surface.height)?;
+        let shadow_extent = exact_surface_extent(DirectionalShadowMap::resolution())?;
         let mut queue = ApplicationRenderQueue::new();
+        queue
+            .enqueue(
+                nord_app::ApplicationRenderPassDesc::new("Nord directional shadow depth")
+                    .use_resource(shadow_map.color, ApplicationResourceUsage::ColorAttachmentWrite)
+                    .use_resource(shadow_map.depth, ApplicationResourceUsage::DepthAttachmentWrite)
+                    .use_resource(vertex_buffer, ApplicationResourceUsage::VertexBufferRead)
+                    .use_resource(index_buffer, ApplicationResourceUsage::IndexBufferRead)
+                    .use_resource(instance_buffer, ApplicationResourceUsage::VertexBufferRead)
+                    .use_resource(camera_buffer, ApplicationResourceUsage::ConstantBufferRead),
+                move |encoder| {
+                    encoder.begin_graphics_pass_with_attachments(
+                        &[ApplicationColorAttachmentBinding {
+                            resource: shadow_map.color,
+                            view: shadow_map.color_view,
+                            clear_color: ApplicationClearColor::rgba(1.0, 1.0, 1.0, 1.0),
+                        }],
+                        Some((shadow_map.depth, shadow_map.depth_view)),
+                        1.0,
+                        Some(ApplicationViewport::new(0.0, 0.0, shadow_extent, shadow_extent)),
+                        None,
+                    )?;
+                    for range in shadow_draw_ranges {
+                        encoder.draw(
+                            &shadow_pipeline,
+                            &shadow_vertex_shader,
+                            &shadow_pixel_shader,
+                            &[camera_binding],
+                            &[
+                                ApplicationVertexBufferBinding {
+                                    slot: 0,
+                                    buffer: vertex_buffer,
+                                    offset: 0,
+                                    size: vertex_buffer_size,
+                                    stride: VERTEX_STRIDE,
+                                },
+                                ApplicationVertexBufferBinding {
+                                    slot: 1,
+                                    buffer: instance_buffer,
+                                    offset: 0,
+                                    size: instance_buffer_size,
+                                    stride: INSTANCE_STRIDE,
+                                },
+                            ],
+                            Some(nord_app::ApplicationIndexBufferBinding {
+                                buffer: index_buffer,
+                                offset: 0,
+                                size: index_buffer_size,
+                                format: nord_app::ApplicationIndexFormat::Uint16,
+                            }),
+                            nord_app::ApplicationDrawCall::Indexed {
+                                index_count,
+                                instance_count: range.instance_count,
+                                first_index: 0,
+                                base_vertex: 0,
+                                first_instance: range.first_instance,
+                            },
+                        )?;
+                    }
+                    encoder.end_graphics_pass()?;
+                    Ok(())
+                },
+            )
+            .map_err(|error| ApplicationDiagnosticError::msg(format!("{error:?}")))
+            .context("encoding the game's directional-light shadow depth pass")?;
         queue
             .enqueue(
                 nord_app::ApplicationRenderPassDesc::new("Nord metallic-roughness PBR mesh")
@@ -363,7 +466,8 @@ impl GameRenderer {
                     .use_resource(material_constants, ApplicationResourceUsage::ConstantBufferRead)
                     .use_resource(material_textures[0], ApplicationResourceUsage::SampledRead)
                     .use_resource(material_textures[1], ApplicationResourceUsage::SampledRead)
-                    .use_resource(material_textures[2], ApplicationResourceUsage::SampledRead),
+                    .use_resource(material_textures[2], ApplicationResourceUsage::SampledRead)
+                    .use_resource(shadow_map.color, ApplicationResourceUsage::SampledRead),
                 move |encoder| {
                     encoder.begin_graphics_pass_with_attachments(
                         &[ApplicationColorAttachmentBinding {
@@ -390,6 +494,7 @@ impl GameRenderer {
                                 material_bindings[2],
                                 material_bindings[3],
                                 material_bindings[4],
+                                shadow_binding,
                             ],
                             &[
                                 ApplicationVertexBufferBinding {
@@ -432,6 +537,15 @@ impl GameRenderer {
             .submit_render_queue(&mut queue)
             .map_err(|error| ApplicationDiagnosticError::msg(format!("{error:?}")))
             .context("submitting the game's PBR mesh render graph")?;
+        if !self.shadow_pass_reported {
+            nord_app::info!(
+                name: "directional_shadow_pass_submitted",
+                target: "nord::render",
+                resolution = DirectionalShadowMap::resolution(),
+                "Directional shadow depth and forward PBR passes were submitted in graph order"
+            );
+            self.shadow_pass_reported = true;
+        }
         renderer
             .present_texture(surface.color)
             .map_err(ApplicationDiagnosticError::msg)
@@ -506,6 +620,7 @@ impl GameRenderer {
             .map_err(ApplicationDiagnosticError::msg)
             .context("waiting for graphics work before game renderer shutdown")?;
         self.material.shutdown(&mut renderer)?;
+        self.shadows.shutdown(&mut renderer)?;
         for resource in [
             self.surface.color,
             self.surface.depth,
@@ -532,6 +647,18 @@ fn create_game_camera(aspect_ratio: f32) -> nord_app::ApplicationResult<Perspect
         .map_err(ApplicationDiagnosticError::msg)
         .context("orienting the game's perspective camera")?;
     Ok(camera)
+}
+
+fn initial_shadow_visibility(
+    scene: &GameScene,
+) -> nord_app::ApplicationResult<(Vec<u8>, Vec<DrawRange>, visibility::CullingMetrics)> {
+    let view_projection = shadows::directional_light_view_projection().ok_or_else(|| {
+        ApplicationDiagnosticError::msg("directional light projection is invalid")
+    })?;
+    let mut visible_mask = Vec::with_capacity(scene.instance_count());
+    let mut draw_ranges = Vec::with_capacity(scene.instance_count());
+    let metrics = scene.update_visibility(view_projection, &mut visible_mask, &mut draw_ranges);
+    Ok((visible_mask, draw_ranges, metrics))
 }
 
 fn test_cube_transform() -> nord_app::ApplicationResult<Mat4> {
@@ -669,6 +796,7 @@ fn encode_camera_constants(
     view_projection: Mat4,
     normal_model: Mat4,
     camera_position: Vec3,
+    light_view_projection: Mat4,
 ) -> [u8; CONSTANT_BUFFER_BYTES] {
     let mut bytes = [0_u8; CONSTANT_BUFFER_BYTES];
     let mut offset = 0;
@@ -683,6 +811,12 @@ fn encode_camera_constants(
     for value in [camera_position.x, camera_position.y, camera_position.z, 1.0] {
         bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
         offset += 4;
+    }
+    for column in light_view_projection.to_cols() {
+        for value in column.to_array() {
+            bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+            offset += 4;
+        }
     }
     bytes
 }

@@ -91,6 +91,34 @@ try {
         throw "The game stayed open, but did not write the CPU visibility/instancing measurement to $logDirectory."
     }
     Write-Host "CPU visibility/instancing measurement: $metrics"
+
+    $shadowPass = if ($null -ne $latestLog) {
+        Get-Content -LiteralPath $latestLog.FullName |
+            Where-Object { $_ -match 'directional_shadow_pass_submitted' } |
+            Select-Object -Last 1
+    } else {
+        $null
+    }
+    if (-not $shadowPass) {
+        throw "The game stayed open, but did not submit the directional shadow render-graph pass."
+    }
+    Write-Host "Directional shadow render-graph pass: $shadowPass"
+
+    $shadowSetup = if ($null -ne $latestLog) {
+        Get-Content -LiteralPath $latestLog.FullName |
+            Where-Object { $_ -match 'directional_shadow_path_initialized' } |
+            Select-Object -Last 1
+    } else {
+        $null
+    }
+    if (-not $shadowSetup) {
+        throw 'The game stayed open, but did not report its directional shadow caster coverage.'
+    }
+    $shadowSetupEvent = $shadowSetup | ConvertFrom-Json
+    if ([uint32]$shadowSetupEvent.fields.caster_instances -eq 0) {
+        throw 'The directional shadow light frustum culled every demo instance.'
+    }
+    Write-Host "Directional shadow caster coverage: $shadowSetup"
 } finally {
     if ($null -ne $process) {
         $process.Refresh()

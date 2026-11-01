@@ -209,6 +209,7 @@ fn load_validated_shader_program()
             METALLIC_ROUGHNESS_REGISTER,
         ),
         ("normalTexture", ApplicationShaderBindingKind::SampledResource, NORMAL_REGISTER),
+        ("directionalShadowTexture", ApplicationShaderBindingKind::SampledResource, 3),
         ("materialSampler", ApplicationShaderBindingKind::Sampler, SAMPLER_REGISTER),
     ] {
         require_binding(&pixel_shader, ApplicationShaderStage::Pixel, kind, name, register)?;
@@ -416,7 +417,7 @@ fn encode_material_constants(descriptor: PbrMaterialDesc) -> [u8; 256] {
         0.0,
         descriptor.normal_scale,
         descriptor.exposure,
-        0.0,
+        1.0 / 2048.0,
         0.0,
     ];
     for (index, value) in values.into_iter().enumerate() {

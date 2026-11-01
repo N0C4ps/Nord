@@ -338,6 +338,11 @@ fn parse_bindings(dump: &str) -> Result<Vec<ShaderResourceBinding>, ShaderCompil
             continue;
         }
         let line = line.trim().trim_start_matches(';').trim();
+        if line.ends_with(':') && !line.contains("Name ") {
+            // Resource-free stages have an empty table; stop at DXC's next
+            // disassembly section instead of treating its rows as bindings.
+            break;
+        }
         if line.is_empty() {
             // DXC emits comment-only separator rows before the table header.
             // Keep scanning until at least one binding has been parsed; after
@@ -457,6 +462,23 @@ mod tests {
         assert_eq!(bindings[0].register, 0);
         assert_eq!(bindings[0].space, 0);
         assert_eq!(bindings[0].count, 1);
+    }
+
+    #[test]
+    fn accepts_empty_dxc_resource_table_without_parsing_following_sections() {
+        let dump = "\
+; Resource Bindings:
+;
+; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
+; ------------------------------ ---------- ------- ----------- ------- -------------- ------
+;
+; ViewId state:
+;
+; Number of inputs: 4, outputs: 1
+;   output 0 depends on inputs: { 2 }
+";
+
+        assert!(parse_bindings(dump).expect("empty table should be valid").is_empty());
     }
 }
 

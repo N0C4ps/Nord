@@ -4,19 +4,21 @@ cbuffer CameraData : register(b0)
     column_major float4x4 viewProjection;
     column_major float4x4 normalModel;
     float4 cameraPosition;
+    column_major float4x4 lightViewProjection;
 };
 
 cbuffer MaterialData : register(b1)
 {
     float4 baseColorFactor;
     float4 materialFactors;
-    // x: normal scale, y: exposure, z/w reserved.
+    // x: normal scale, y: exposure, z: shadow texel size, w reserved.
     float4 materialOptions;
 };
 
 Texture2D<float4> baseColorTexture : register(t0);
 Texture2D<float4> metallicRoughnessTexture : register(t1);
 Texture2D<float4> normalTexture : register(t2);
+Texture2D<float> directionalShadowTexture : register(t3);
 SamplerState materialSampler : register(s0);
 
 static const float PI = 3.14159265358979323846;
@@ -39,6 +41,7 @@ struct VertexOutput
     float4 worldTangent : TEXCOORD2;
     float2 texCoord : TEXCOORD3;
     float3 instanceTint : TEXCOORD4;
+    float4 lightPosition : TEXCOORD5;
 };
 
 VertexOutput VSMain(VertexInput input)
@@ -56,6 +59,7 @@ VertexOutput VSMain(VertexInput input)
     output.worldTangent = float4(worldTangent, input.tangent.w);
     output.texCoord = input.texCoord;
     output.instanceTint = input.instanceTint;
+    output.lightPosition = mul(lightViewProjection, worldPosition);
     return output;
 }
 
@@ -97,6 +101,44 @@ float3 LinearToSrgb(float3 color)
     const float3 low = color * 12.92;
     const float3 high = 1.055 * pow(max(color, 0.0), 1.0 / 2.4) - 0.055;
     return lerp(high, low, color <= 0.0031308);
+}
+
+float DirectionalShadowVisibility(float4 lightPosition, float normalLight)
+{
+    if (lightPosition.w <= 0.0)
+    {
+        return 1.0;
+    }
+    const float3 lightNdc = lightPosition.xyz / lightPosition.w;
+    if (lightNdc.x < -1.0 || lightNdc.x > 1.0 ||
+        lightNdc.y < -1.0 || lightNdc.y > 1.0 ||
+        lightNdc.z < 0.0 || lightNdc.z > 1.0)
+    {
+        return 1.0;
+    }
+    const float2 shadowUv = float2(lightNdc.x * 0.5 + 0.5, 0.5 - lightNdc.y * 0.5);
+    const float texel = materialOptions.z;
+    const float2 halfTexel = texel * 0.5;
+    const float bias = max(0.00035 * (1.0 - normalLight), 0.00008);
+    float visibility = 0.0;
+    [unroll]
+    for (int y = -1; y <= 1; ++y)
+    {
+        [unroll]
+        for (int x = -1; x <= 1; ++x)
+        {
+            const float2 tapUv = clamp(
+                shadowUv + float2((float)x, (float)y) * texel,
+                halfTexel,
+                1.0 - halfTexel);
+            const float storedDepth = directionalShadowTexture.SampleLevel(
+                materialSampler,
+                tapUv,
+                0.0);
+            visibility += (lightNdc.z - bias <= storedDepth) ? 1.0 : 0.0;
+        }
+    }
+    return visibility / 9.0;
 }
 
 float4 PSMain(VertexOutput input) : SV_Target0
@@ -143,9 +185,10 @@ float4 PSMain(VertexOutput input) : SV_Target0
 
     // One directional key is evaluated by a Cook-Torrance GGX BRDF. A low,
     // hemispherical diffuse fill keeps the prototype legible without claiming
-    // to be image-based lighting; IBL and shadow maps are later renderer stages.
+    // to be image-based lighting; ambient remains unshadowed in this first pass.
     const float3 keyRadiance = float3(3.8, 3.55, 3.2);
-    const float3 keyLight = (diffuse + specular) * keyRadiance * normalLight;
+    const float shadowVisibility = DirectionalShadowVisibility(input.lightPosition, normalLight);
+    const float3 keyLight = (diffuse + specular) * keyRadiance * normalLight * shadowVisibility;
     const float hemisphere = saturate(shadingNormal.y * 0.5 + 0.5);
     const float3 ambientIrradiance = lerp(
         float3(0.035, 0.045, 0.065),
