@@ -225,6 +225,47 @@ impl ShaderCompiler {
     }
 }
 
+impl CompiledShader {
+    /// Construct a shader from compiler-produced, prebuilt artifacts.
+    ///
+    /// This is intended for game builds that compile shaders offline and embed
+    /// DXIL plus DXC reflection/disassembly artifacts into the executable. It
+    /// retains the reflected bindings needed by pipeline creation without
+    /// requiring DXC to be installed on the machine running the game.
+    ///
+    /// # Errors
+    /// Returns an error when the bytecode is empty or the reflection dump is
+    /// missing or malformed.
+    pub fn from_precompiled(
+        stage: ShaderStage,
+        bytecode: Vec<u8>,
+        reflection_binary: Vec<u8>,
+        reflection_dump: String,
+    ) -> Result<Self, ShaderCompileError> {
+        if bytecode.is_empty() {
+            return Err(ShaderCompileError::EmptyBytecode);
+        }
+        if reflection_binary.is_empty() || reflection_dump.is_empty() {
+            return Err(ShaderCompileError::MissingReflection);
+        }
+        let bindings = parse_bindings(&reflection_dump)?;
+        let mut shader_hasher = blake3::Hasher::new_derive_key("nord.shader.dxil.v1");
+        shader_hasher.update(&bytecode);
+        let shader_id = crate::ShaderId(*shader_hasher.finalize().as_bytes());
+        Ok(Self {
+            stage,
+            shader_id,
+            bytecode,
+            reflection: ShaderReflection {
+                binary: reflection_binary,
+                dump: reflection_dump,
+                bindings,
+            },
+            diagnostics: Vec::new(),
+        })
+    }
+}
+
 /// Shader compiler failure with source/compiler details retained.
 #[derive(Debug)]
 pub enum ShaderCompileError {
@@ -283,7 +324,6 @@ fn validate_options(options: &ShaderCompileOptions) -> Result<(), ShaderCompileE
     Ok(())
 }
 
-#[cfg(not(target_os = "windows"))]
 fn parse_bindings(dump: &str) -> Result<Vec<ShaderResourceBinding>, ShaderCompileError> {
     let mut in_table = false;
     let mut bindings = Vec::new();
