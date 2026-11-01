@@ -44,13 +44,14 @@ escrita de profundidade em `D32Float`. Assim a iluminação difusa e ambiente é
 calculada diretamente no pixel shader durante o passe forward, e superfícies
 mais próximas vencem pelo depth buffer.
 
-`assets/shaders/nord_basic_forward.hlsl` é um asset do jogo. Na inicialização,
-`src/render/material.rs` pede ao `ApplicationShaderCompiler` os estágios
-`VSMain` e `PSMain`, verifica pela reflexão que `CameraData` está no `b0` do
-vertex shader e que `MaterialData` está no `b1` do pixel shader, então cria a
-PSO e o binding do material. Diagnósticos emitidos pelo compilador vão para o
-logger. Texturas, mapas PBR, materiais transparentes e batching continuam fora
-deste contrato inicial.
+`assets/shaders/nord_basic_forward.hlsl` é um asset de desenvolvimento do jogo.
+O `build.rs` compila `VSMain` e `PSMain` para DXIL durante o build e grava os
+artefatos somente em `OUT_DIR`. O executável incorpora bytecode e reflexão; em
+runtime, `src/render/material.rs` os carrega e verifica que `CameraData` está
+no `b0` do vertex shader e `MaterialData` no `b1` do pixel shader. O jogador
+não precisa receber a pasta de shaders nem instalar DXC. DXC continua sendo
+ferramenta necessária para quem compila o projeto. Texturas, mapas PBR,
+materiais transparentes e batching continuam fora deste contrato inicial.
 
 O foco da janela, sozinho, não captura o mouse. Um clique primário dentro da
 janela focada ativa o modo de primeira pessoa: o backend Win32 esconde e mantém

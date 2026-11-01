@@ -110,8 +110,8 @@ non-indexed ranges. The graph checks that those streams were declared as vertex
 or index reads, and the backend checks resource usage, slot layouts, strides,
 offsets, draw counts, and byte ranges before recording. The resulting lists are
 submitted in compiled graph order to one direct queue. Their allocators stay
-alive until the final fence retires. `src/render` remains on clear/present
-because the game does not yet own shader assets or renderable content.
+alive until the final fence retires. The game uses this path from
+`src/render` for its depth-tested opaque cube pass.
 Reflected bounded CBV/SRV/UAV/sampler arrays are represented as descriptor
 tables; native recording checks exact reflected count, heap class, contiguity,
 slot liveness, view kind, and graph declarations before binding the table start.
@@ -165,9 +165,12 @@ This uses the documented [D3D12 `CopyResource` constraints](https://learn.micros
 and [resource barrier rules](https://learn.microsoft.com/en-us/windows/win32/direct3d12/using-resource-barriers-to-synchronize-in-direct3d-12).
 The first 3D camera, indexed mesh, transforms, and depth-tested game pass are
 documented in [Renderer 3D — Stage 1](render-3d-stage-1.md).
-The game's basic opaque material contract and shader loading live in
-`src/render/material.rs`; `nord_render` supplies only compiler/reflection,
-resource, descriptor, pipeline, and command-encoding infrastructure.
+The game's basic opaque material contract lives in `src/render/material.rs`.
+Cargo's build script compiles its HLSL to DXIL in `OUT_DIR`, and the executable
+embeds the bytecode and reflection artifacts. Runtime loading needs no shader
+directory or DXC installation. `nord_render` supplies the generic offline
+shader-artifact constructor, resource, descriptor, pipeline, and
+command-encoding infrastructure.
 
 `nord_platform` exposes a hidden integration token for a live native window;
 `nord_app` passes it directly to `nord_render`. The token never reaches game

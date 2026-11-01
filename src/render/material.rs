@@ -4,16 +4,13 @@ use nord_app::{
     ApplicationBufferDesc, ApplicationBufferMemory, ApplicationBufferUsage,
     ApplicationCompiledShader, ApplicationDiagnosticError, ApplicationErrorContext,
     ApplicationGraphicsPipelineDesc, ApplicationPipelineDescriptorBinding, ApplicationRenderer,
-    ApplicationShaderBindingKind, ApplicationShaderCompileOptions, ApplicationShaderCompiler,
-    ApplicationShaderStage, ApplicationTextureFormat, ApplicationVertexAttribute,
-    ApplicationVertexFormat,
+    ApplicationShaderBindingKind, ApplicationShaderStage, ApplicationTextureFormat,
+    ApplicationVertexAttribute, ApplicationVertexFormat,
 };
 use nord_app::{ApplicationDescriptorHandle, ApplicationGpuResourceHandle};
-use std::path::PathBuf;
 
 const MATERIAL_CONSTANT_BYTES: u64 = 256;
 const MATERIAL_CONSTANT_REGISTER: u32 = 1;
-const MATERIAL_SHADER: &str = "nord_basic_forward.hlsl";
 
 /// Small game material contract for the first opaque forward pass.
 ///
@@ -178,37 +175,22 @@ impl BasicOpaqueMaterial {
 
 fn load_shader_program()
 -> nord_app::ApplicationResult<(ApplicationCompiledShader, ApplicationCompiledShader)> {
-    let shader_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("assets")
-        .join("shaders")
-        .join(MATERIAL_SHADER);
-    let compiler = ApplicationShaderCompiler::default();
-    let vertex = compiler
-        .compile(&ApplicationShaderCompileOptions::new(
-            &shader_path,
-            ApplicationShaderStage::Vertex,
-            "VSMain",
-        ))
-        .map_err(ApplicationDiagnosticError::msg)
-        .context("loading and compiling the game's forward vertex shader")?;
-    let pixel = compiler
-        .compile(&ApplicationShaderCompileOptions::new(
-            &shader_path,
-            ApplicationShaderStage::Pixel,
-            "PSMain",
-        ))
-        .map_err(ApplicationDiagnosticError::msg)
-        .context("loading and compiling the game's forward pixel shader")?;
-    for (stage, shader) in [("vertex", &vertex), ("pixel", &pixel)] {
-        for diagnostic in &shader.diagnostics {
-            nord_app::warn!(
-                target: "nord::render::shader",
-                shader_stage = stage,
-                diagnostic = %diagnostic.message,
-                "Shader compiler emitted a diagnostic"
-            );
-        }
-    }
+    let vertex = ApplicationCompiledShader::from_precompiled(
+        ApplicationShaderStage::Vertex,
+        include_bytes!(concat!(env!("OUT_DIR"), "/nord_basic_forward.vs.dxil")).to_vec(),
+        include_bytes!(concat!(env!("OUT_DIR"), "/nord_basic_forward.vs.reflection")).to_vec(),
+        include_str!(concat!(env!("OUT_DIR"), "/nord_basic_forward.vs.asm")).to_owned(),
+    )
+    .map_err(ApplicationDiagnosticError::msg)
+    .context("loading the game's embedded forward vertex shader")?;
+    let pixel = ApplicationCompiledShader::from_precompiled(
+        ApplicationShaderStage::Pixel,
+        include_bytes!(concat!(env!("OUT_DIR"), "/nord_basic_forward.ps.dxil")).to_vec(),
+        include_bytes!(concat!(env!("OUT_DIR"), "/nord_basic_forward.ps.reflection")).to_vec(),
+        include_str!(concat!(env!("OUT_DIR"), "/nord_basic_forward.ps.asm")).to_owned(),
+    )
+    .map_err(ApplicationDiagnosticError::msg)
+    .context("loading the game's embedded forward pixel shader")?;
     Ok((vertex, pixel))
 }
 
