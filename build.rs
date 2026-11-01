@@ -6,12 +6,16 @@ use std::process::Command;
 const SHADER_SOURCE: &str = "assets/shaders/nord_pbr_forward.hlsl";
 const SHADOW_SHADER_SOURCE: &str = "assets/shaders/nord_directional_shadow.hlsl";
 const GPU_CULL_SHADER_SOURCE: &str = "assets/shaders/nord_gpu_culling.hlsl";
+const CAMERA_DEPTH_SHADER_SOURCE: &str = "assets/shaders/nord_camera_depth.hlsl";
+const HIZ_SHADER_SOURCE: &str = "assets/shaders/nord_hiz.hlsl";
 
 fn main() {
     println!("cargo:rerun-if-changed=nord.exe.manifest");
     println!("cargo:rerun-if-changed={SHADER_SOURCE}");
     println!("cargo:rerun-if-changed={SHADOW_SHADER_SOURCE}");
     println!("cargo:rerun-if-changed={GPU_CULL_SHADER_SOURCE}");
+    println!("cargo:rerun-if-changed={CAMERA_DEPTH_SHADER_SOURCE}");
+    println!("cargo:rerun-if-changed={HIZ_SHADER_SOURCE}");
     for variable in ["NORD_DXC_PATH", "DXC_PATH", "ProgramFiles(x86)"] {
         println!("cargo:rerun-if-env-changed={variable}");
     }
@@ -30,6 +34,7 @@ fn main() {
     compile_game_shaders();
 }
 
+#[allow(clippy::too_many_lines)]
 fn compile_game_shaders() {
     let manifest_dir =
         PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("Cargo sets the package directory"));
@@ -95,9 +100,11 @@ fn compile_game_shaders() {
         },
     );
     let culling_shader = manifest_dir.join(GPU_CULL_SHADER_SOURCE);
-    for (entry, artifact_name) in
-        [("CSInitialize", "nord_gpu_culling_init"), ("CSCull", "nord_gpu_culling_cull")]
-    {
+    for (entry, artifact_name) in [
+        ("CSInitialize", "nord_gpu_culling_init"),
+        ("CSCull", "nord_gpu_culling_cull"),
+        ("CSCullHiZ", "nord_gpu_culling_hiz"),
+    ] {
         compile_stage(
             &dxc,
             &culling_shader,
@@ -106,6 +113,32 @@ fn compile_game_shaders() {
             ShaderStageSpec { artifact_name, entry, profile: "cs_6_0", stage: "cs" },
         );
     }
+    let camera_depth_shader = manifest_dir.join(CAMERA_DEPTH_SHADER_SOURCE);
+    for (entry, artifact_name, profile, stage) in [
+        ("VSMain", "nord_camera_depth", "vs_6_0", "vs"),
+        ("PSMain", "nord_camera_depth", "ps_6_0", "ps"),
+    ] {
+        compile_stage(
+            &dxc,
+            &camera_depth_shader,
+            shader_directory,
+            &output_directory,
+            ShaderStageSpec { artifact_name, entry, profile, stage },
+        );
+    }
+    let hiz_shader = manifest_dir.join(HIZ_SHADER_SOURCE);
+    compile_stage(
+        &dxc,
+        &hiz_shader,
+        shader_directory,
+        &output_directory,
+        ShaderStageSpec {
+            artifact_name: "nord_hiz",
+            entry: "CSBuild",
+            profile: "cs_6_0",
+            stage: "cs",
+        },
+    );
 }
 
 #[derive(Clone, Copy)]

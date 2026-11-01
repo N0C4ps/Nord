@@ -1,10 +1,12 @@
 mod gpu_driven;
 mod material;
+mod occlusion;
 mod shadows;
 mod visibility;
 
 use self::gpu_driven::GpuDrivenCulling;
 use self::material::{PbrMaterial, PbrMaterialDesc};
+use self::occlusion::HiZOcclusion;
 use self::shadows::DirectionalShadowMap;
 use self::visibility::{CullingMetrics, DrawRange, GameScene};
 use crate::camera::GameCameraController;
@@ -26,6 +28,8 @@ const VERTEX_STRIDE: u32 = 48;
 const INSTANCE_STRIDE: u32 = 24;
 const CONSTANT_BUFFER_BYTES: usize = 512;
 const GAME_UV_TILE_COUNT: f32 = 2.0;
+const RENDER_BENCHMARK_WARMUP_FRAMES: usize = 16;
+const RENDER_BENCHMARK_MEASURED_FRAMES: usize = 80;
 
 /// Surface-sized game output and its depth buffer.
 #[derive(Clone, Copy)]
@@ -51,6 +55,9 @@ pub(super) struct GameRenderer {
     instance_buffer_size: u32,
     scene: GameScene,
     gpu_culling: GpuDrivenCulling,
+    occlusion: Option<HiZOcclusion>,
+    benchmark_pending: bool,
+    benchmark_samples: Vec<u128>,
     cpu_culling_baseline: CullingMetrics,
     gpu_validation_pending: bool,
     camera_buffer: nord_app::ApplicationGpuResourceHandle,
@@ -111,7 +118,16 @@ impl GameRenderer {
         let mesh = make_test_cube()?;
         let model = test_cube_transform()?;
         let mesh_gpu = Self::upload_test_mesh(&mut renderer, &mesh)?;
-        let scene = GameScene::demo_grid(mesh.validated_mesh.bounds(), model);
+        let mut scene = GameScene::demo_grid(mesh.validated_mesh.bounds(), model);
+        let occlusion_probe_enabled =
+            std::env::var("NORD_OCCLUSION_STRESS_SCENE").is_ok_and(|value| value == "1");
+        let occlusion_probe_added =
+            occlusion_probe_enabled && scene.add_occlusion_probe(camera.camera().forward());
+        if occlusion_probe_enabled && !occlusion_probe_added {
+            return Err(ApplicationDiagnosticError::msg(
+                "could not create the requested conservative occlusion stress scene",
+            ));
+        }
         let (instance_buffer, instance_buffer_size) =
             Self::upload_instances(&mut renderer, &scene)?;
         let gpu_culling = GpuDrivenCulling::create(
@@ -122,14 +138,21 @@ impl GameRenderer {
                 .map_err(ApplicationDiagnosticError::msg)
                 .context("validating the scene instance count for GPU culling")?,
             mesh_gpu.index_count,
-            scene.conservative_instance_radius().ok_or_else(|| {
+            scene.conservative_instance_half_extents().ok_or_else(|| {
                 ApplicationDiagnosticError::msg(
-                    "scene instance bounds cannot form a culling sphere",
+                    "scene instance bounds cannot form conservative culling extents",
                 )
             })?,
         )?;
         let (camera_buffer, camera_binding) = Self::create_camera_buffer(&mut renderer)?;
         let surface = Self::create_surface(&mut renderer, width, height)?;
+        let occlusion_enabled =
+            std::env::var("NORD_OCCLUSION_CULLING").is_ok_and(|value| value == "1");
+        let occlusion = if occlusion_enabled {
+            Some(HiZOcclusion::create(&mut renderer, width, height)?)
+        } else {
+            None
+        };
         let mut visible_mask = Vec::with_capacity(scene.instance_count());
         let mut draw_ranges = Vec::with_capacity(scene.instance_count());
         let initial_metrics = scene.update_visibility(
@@ -186,6 +209,13 @@ impl GameRenderer {
             indirect_draw_commands = 1,
             "GPU frustum compaction and indexed-indirect rendering are configured for the camera pass"
         );
+        nord_app::info!(
+            name: "occlusion_path_selected",
+            target: "nord::render",
+            path = if occlusion_enabled { "same-frame-hiz" } else { "frustum-only" },
+            occlusion_probe_instances = if occlusion_probe_added { 8 } else { 0 },
+            "Occlusion path selected for this run"
+        );
         Ok(Self {
             renderer: Some(renderer),
             surface,
@@ -198,6 +228,9 @@ impl GameRenderer {
             instance_buffer_size,
             scene,
             gpu_culling,
+            occlusion,
+            benchmark_pending: std::env::var_os("NORD_RENDER_BENCHMARK").is_some(),
+            benchmark_samples: Vec::with_capacity(96),
             cpu_culling_baseline: initial_metrics,
             gpu_validation_pending: std::env::var_os("NORD_GPU_DRIVEN_VALIDATE").is_some(),
             camera_buffer,
@@ -378,7 +411,12 @@ impl GameRenderer {
             .write_buffer(camera_buffer, 0, &constants)
             .map_err(ApplicationDiagnosticError::msg)
             .context("updating the game's per-frame camera and model matrices")?;
-        self.gpu_culling.update_constants(renderer, frustum_planes)?;
+        self.gpu_culling.update_constants(
+            renderer,
+            frustum_planes,
+            view_projection,
+            self.occlusion.as_ref().map_or(1, |_| HiZOcclusion::mip_count()),
+        )?;
         self.submit_pbr_mesh_pass(shadow_draw_ranges)
     }
 
@@ -420,7 +458,32 @@ impl GameRenderer {
         let viewport_height = exact_surface_extent(surface.height)?;
         let shadow_extent = exact_surface_extent(DirectionalShadowMap::resolution())?;
         let mut queue = ApplicationRenderQueue::new();
-        self.gpu_culling.enqueue_compute_passes(&mut queue)?;
+        if let Some(occlusion) = &self.occlusion {
+            self.gpu_culling.enqueue_compute_passes(&mut queue)?;
+            occlusion.enqueue_depth_prepass(
+                &mut queue,
+                camera_buffer,
+                camera_binding,
+                vertex_buffer,
+                vertex_buffer_size,
+                index_buffer,
+                index_buffer_size,
+                index_count,
+                visible_instances,
+                visible_instances_size,
+                indirect_arguments,
+                maximum_instances,
+            )?;
+            occlusion.enqueue_build_passes(&mut queue)?;
+            self.gpu_culling.enqueue_initialize_pass(&mut queue)?;
+            self.gpu_culling.enqueue_hiz_cull_pass(
+                &mut queue,
+                &occlusion.hiz_resources(),
+                occlusion.hiz_views(),
+            )?;
+        } else {
+            self.gpu_culling.enqueue_compute_passes(&mut queue)?;
+        }
         queue
             .enqueue(
                 nord_app::ApplicationRenderPassDesc::new("Nord directional shadow depth")
@@ -562,21 +625,25 @@ impl GameRenderer {
             )
             .map_err(|error| ApplicationDiagnosticError::msg(format!("{error:?}")))
             .context("encoding the game's metallic-roughness PBR mesh pass")?;
+        let benchmark_frame = self.benchmark_pending;
+        let benchmark_start = std::time::Instant::now();
         renderer
             .submit_render_queue(&mut queue)
             .map_err(|error| ApplicationDiagnosticError::msg(format!("{error:?}")))
             .context("submitting the game's PBR mesh render graph")?;
         if self.gpu_validation_pending {
-            let visible_instances = self.gpu_culling.validate_gpu_output(renderer)?;
+            let culling_stats = self.gpu_culling.validate_gpu_output(renderer)?;
             nord_app::info!(
                 name: "gpu_driven_culling_validated",
                 target: "nord::render",
                 input_instances = self.cpu_culling_baseline.total_instances,
-                visible_instances,
+                visible_instances = culling_stats.visible,
+                frustum_visible_instances = culling_stats.frustum_visible,
+                occlusion_culled_instances = culling_stats.occlusion_culled,
                 culled_instances = self
                     .cpu_culling_baseline
                     .total_instances
-                    .saturating_sub(visible_instances),
+                    .saturating_sub(culling_stats.visible),
                 cpu_visible_baseline = self.cpu_culling_baseline.visible_instances,
                 cpu_culling_ns = self.cpu_culling_baseline.culling_ns,
                 indirect_draw_commands = 1,
@@ -596,7 +663,22 @@ impl GameRenderer {
         renderer
             .present_texture(surface.color)
             .map_err(ApplicationDiagnosticError::msg)
-            .context("presenting the game's 3D mesh")
+            .context("presenting the game's 3D mesh")?;
+        if benchmark_frame {
+            renderer
+                .wait_idle()
+                .map_err(ApplicationDiagnosticError::msg)
+                .context("waiting for GPU completion during render-path measurement")?;
+            collect_render_benchmark(
+                renderer,
+                surface,
+                self.occlusion.is_some(),
+                &mut self.benchmark_samples,
+                &mut self.benchmark_pending,
+                benchmark_start.elapsed().as_nanos(),
+            )?;
+        }
+        Ok(())
     }
 
     pub(super) fn wait_for_frame(&self) -> nord_app::ApplicationResult<()> {
@@ -634,6 +716,9 @@ impl GameRenderer {
             return Ok(());
         }
         let aspect_ratio = surface_aspect(width, height)?;
+        if let Some(occlusion) = self.occlusion.take() {
+            occlusion.shutdown(renderer)?;
+        }
         renderer
             .destroy_resource(self.surface.color)
             .map_err(ApplicationDiagnosticError::msg)
@@ -647,6 +732,9 @@ impl GameRenderer {
             .map_err(ApplicationDiagnosticError::msg)
             .context("resizing the Nord render surface")?;
         self.surface = Self::create_surface(renderer, width, height)?;
+        if std::env::var("NORD_OCCLUSION_CULLING").is_ok_and(|value| value == "1") {
+            self.occlusion = Some(HiZOcclusion::create(renderer, width, height)?);
+        }
         self.camera
             .camera_mut()
             .set_aspect_ratio(aspect_ratio)
@@ -668,6 +756,9 @@ impl GameRenderer {
             .context("waiting for graphics work before game renderer shutdown")?;
         self.material.shutdown(&mut renderer)?;
         self.shadows.shutdown(&mut renderer)?;
+        if let Some(occlusion) = &self.occlusion {
+            occlusion.shutdown(&mut renderer)?;
+        }
         self.gpu_culling.destroy(&mut renderer)?;
         for resource in [
             self.surface.color,
@@ -684,6 +775,48 @@ impl GameRenderer {
         }
         Ok(())
     }
+}
+
+fn collect_render_benchmark(
+    renderer: &mut ApplicationRenderer,
+    surface: GameSurface,
+    hiz_enabled: bool,
+    samples: &mut Vec<u128>,
+    pending: &mut bool,
+    elapsed_ns: u128,
+) -> nord_app::ApplicationResult<()> {
+    samples.push(elapsed_ns);
+    if samples.len() < RENDER_BENCHMARK_WARMUP_FRAMES + RENDER_BENCHMARK_MEASURED_FRAMES {
+        return Ok(());
+    }
+    let mut measured = samples[RENDER_BENCHMARK_WARMUP_FRAMES..].to_vec();
+    measured.sort_unstable();
+    let percentile = |percent: usize| -> u128 {
+        let rank = measured.len().saturating_mul(percent).div_ceil(100).max(1);
+        measured[rank - 1]
+    };
+    let (width, height, pixels) = renderer
+        .read_texture_rgba8(surface.color)
+        .map_err(ApplicationDiagnosticError::msg)
+        .context("reading the completed frame for deterministic visual comparison")?;
+    let checksum = pixels.iter().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)
+    });
+    nord_app::info!(
+        name: "render_path_comparison",
+        target: "nord::render",
+        path = if hiz_enabled { "same-frame-hiz" } else { "frustum-only" },
+        warmup_frames = RENDER_BENCHMARK_WARMUP_FRAMES,
+        measured_frames = RENDER_BENCHMARK_MEASURED_FRAMES,
+        p50_complete_frame_ns = percentile(50),
+        p95_complete_frame_ns = percentile(95),
+        width,
+        height,
+        visual_checksum = format!("{checksum:016x}"),
+        "Render-path timing and output checksum captured for A/B comparison"
+    );
+    *pending = false;
+    Ok(())
 }
 
 fn create_game_camera(aspect_ratio: f32) -> nord_app::ApplicationResult<PerspectiveCamera> {

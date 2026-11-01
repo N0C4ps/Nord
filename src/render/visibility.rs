@@ -91,6 +91,30 @@ impl GameScene {
         Self { instances, instance_data }
     }
 
+    pub(super) fn add_occlusion_probe(&mut self, camera_forward: Vec3) -> bool {
+        let Some(base_bounds) = self
+            .instances
+            .iter()
+            .find(|instance| instance.data.translation == Vec3::ZERO)
+            .and_then(|instance| instance.bounds)
+        else {
+            return false;
+        };
+        for index in 1..=8_u8 {
+            let translation = camera_forward * (f32::from(index) * 1.6);
+            let Some(bounds) = translate_bounds(base_bounds, translation) else {
+                return false;
+            };
+            self.instances.push(SceneInstance {
+                key: BatchKey { mesh_id: 0, material_id: 0 },
+                data: InstanceData { translation, tint: Vec3::splat(1.0) },
+                bounds: Some(bounds),
+            });
+        }
+        self.instance_data = encode_instances(&self.instances);
+        true
+    }
+
     #[cfg(test)]
     fn from_instances(mut instances: Vec<SceneInstance>) -> Self {
         instances.sort_by_key(|instance| instance.key);
@@ -102,12 +126,12 @@ impl GameScene {
         self.instances.len()
     }
 
-    pub(super) fn conservative_instance_radius(&self) -> Option<f32> {
-        let radius = self
+    pub(super) fn conservative_instance_half_extents(&self) -> Option<Vec3> {
+        let extents = self
             .instances
             .iter()
-            .find_map(|instance| instance.bounds.map(|bounds| bounds.half_extents().length()))?;
-        (radius.is_finite() && radius > 0.0).then_some(radius)
+            .find_map(|instance| instance.bounds.map(nord_app::ApplicationAabb3::half_extents))?;
+        (extents.is_finite() && extents.min_element() > 0.0).then_some(extents)
     }
 
     pub(super) fn instance_bytes(&self) -> &[u8] {

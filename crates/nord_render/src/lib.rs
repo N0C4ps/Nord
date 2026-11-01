@@ -1109,6 +1109,29 @@ impl Renderer {
         }
     }
 
+    /// Read a completed, single-sample RGBA8 texture into tightly packed rows.
+    ///
+    /// This diagnostic readback waits for GPU completion and is intended for
+    /// image comparisons and validation rather than a frame hot path.
+    ///
+    /// # Errors
+    /// Returns an error for a stale or unsupported texture, invalid footprint,
+    /// or failed queue synchronization/readback.
+    pub fn read_texture_rgba8(
+        &mut self,
+        target: GpuResourceHandle,
+    ) -> Result<(u32, u32, Vec<u8>), RenderError> {
+        #[cfg(target_os = "windows")]
+        {
+            self.backend.read_texture_rgba8(target)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = target;
+            Err(RenderError::UnsupportedBackend)
+        }
+    }
+
     /// Apply a compiled pass's transition and UAV ordering barriers.
     ///
     /// # Errors

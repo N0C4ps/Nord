@@ -481,6 +481,19 @@ impl ApplicationRenderer {
         self.inner.read_texture_pixel(target, x, y).map_err(ApplicationRenderError)
     }
 
+    /// Read a completed RGBA8 texture for image validation or comparison.
+    /// This operation waits for GPU completion and should stay out of the
+    /// ordinary frame path.
+    ///
+    /// # Errors
+    /// Returns an error for an incompatible texture or failed GPU readback.
+    pub fn read_texture_rgba8(
+        &mut self,
+        target: ApplicationGpuResourceHandle,
+    ) -> Result<(u32, u32, Vec<u8>), ApplicationRenderError> {
+        self.inner.read_texture_rgba8(target).map_err(ApplicationRenderError)
+    }
+
     /// Submit queued passes in compiled dependency order and apply their GPU
     /// barriers through the renderer backend.
     ///
