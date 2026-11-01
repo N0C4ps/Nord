@@ -1,6 +1,6 @@
 mod material;
 
-use self::material::{BasicOpaqueMaterial, BasicOpaqueMaterialDesc};
+use self::material::{PbrMaterial, PbrMaterialDesc};
 use crate::camera::GameCameraController;
 use nord_app::{
     ApplicationBufferDesc, ApplicationBufferMemory, ApplicationBufferUsage, ApplicationClearColor,
@@ -12,12 +12,13 @@ use nord_app::{
     ApplicationWindowHandle,
 };
 use nord_camera::PerspectiveCamera;
-use nord_math::{Mat4, Quat, Vec3};
+use nord_math::{Mat4, Quat, Vec2, Vec3, Vec4};
 use nord_mesh::{IndexedMesh, MeshVertex};
 
 const CLEAR_COLOR: ApplicationClearColor = ApplicationClearColor::rgba(0.025, 0.035, 0.055, 1.0);
-const VERTEX_STRIDE: u32 = 24;
+const VERTEX_STRIDE: u32 = 48;
 const CONSTANT_BUFFER_BYTES: usize = 256;
+const GAME_UV_TILE_COUNT: f32 = 2.0;
 
 /// Surface-sized game output and its depth buffer.
 #[derive(Clone, Copy)]
@@ -43,7 +44,20 @@ pub(super) struct GameRenderer {
     camera_binding: ApplicationPipelineDescriptorBinding,
     camera: GameCameraController,
     model: Mat4,
-    material: BasicOpaqueMaterial,
+    material: PbrMaterial,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct GameVertex {
+    position: Vec3,
+    normal: Vec3,
+    tangent: Vec4,
+    tex_coord: Vec2,
+}
+
+struct GameMesh {
+    validated_mesh: IndexedMesh,
+    vertices: Vec<GameVertex>,
 }
 
 struct MeshGpuResources {
@@ -71,9 +85,9 @@ impl GameRenderer {
         )
         .map_err(ApplicationDiagnosticError::msg)
         .context("initializing Nord's graphics infrastructure")?;
-        let material = BasicOpaqueMaterial::load(
+        let material = PbrMaterial::load(
             &mut renderer,
-            BasicOpaqueMaterialDesc::new([0.12, 0.66, 0.88])?,
+            PbrMaterialDesc::new([0.74, 0.43, 0.19], 0.92, 0.82, 0.78, 1.0)?,
         )?;
         let mesh = make_test_cube()?;
         let mesh_gpu = Self::upload_test_mesh(&mut renderer, &mesh)?;
@@ -87,12 +101,12 @@ impl GameRenderer {
             "Renderer resource bookkeeping services are ready"
         );
         nord_app::info!(
-            name: "mesh_preview_render_path_initialized",
+            name: "pbr_mesh_render_path_initialized",
             target: "nord::render",
             backend = ?renderer.backend(),
             vertices = mesh_gpu.vertex_count,
             indices = mesh_gpu.index_count,
-            "Game perspective camera, indexed mesh, and depth-tested pass are ready"
+            "Game camera, indexed mesh, metallic-roughness material, normal map, and depth-tested pass are ready"
         );
         Ok(Self {
             renderer: Some(renderer),
@@ -112,7 +126,7 @@ impl GameRenderer {
 
     fn upload_test_mesh(
         renderer: &mut ApplicationRenderer,
-        mesh: &IndexedMesh,
+        mesh: &GameMesh,
     ) -> nord_app::ApplicationResult<MeshGpuResources> {
         let (vertex_bytes, index_bytes, index_count) = encode_mesh(mesh)?;
         let vertex_buffer_size = u32::try_from(vertex_bytes.len())
@@ -149,7 +163,7 @@ impl GameRenderer {
             index_buffer,
             index_buffer_size,
             index_count,
-            vertex_count: mesh.vertices().len(),
+            vertex_count: mesh.vertices.len(),
         })
     }
 
@@ -209,6 +223,35 @@ impl GameRenderer {
     }
 
     pub(super) fn render_frame(&mut self) -> nord_app::ApplicationResult<()> {
+        let camera_buffer = self.camera_buffer;
+        let view_projection = self
+            .camera
+            .camera()
+            .view_projection_matrix()
+            .map_err(ApplicationDiagnosticError::msg)
+            .context("building the game's view-projection matrix")?;
+        let normal_model =
+            self.model.inverse().map(Mat4::transpose).ok_or_else(|| {
+                ApplicationDiagnosticError::msg("game object transform is singular")
+            })?;
+        let constants = encode_camera_constants(
+            self.model,
+            view_projection,
+            normal_model,
+            self.camera.camera().position(),
+        );
+        let renderer = self
+            .renderer
+            .as_mut()
+            .ok_or_else(|| ApplicationDiagnosticError::msg("renderer has already shut down"))?;
+        renderer
+            .write_buffer(camera_buffer, 0, &constants)
+            .map_err(ApplicationDiagnosticError::msg)
+            .context("updating the game's per-frame camera and model matrices")?;
+        self.submit_pbr_mesh_pass()
+    }
+
+    fn submit_pbr_mesh_pass(&mut self) -> nord_app::ApplicationResult<()> {
         let renderer = self
             .renderer
             .as_mut()
@@ -221,35 +264,27 @@ impl GameRenderer {
         let camera_buffer = self.camera_buffer;
         let camera_binding = self.camera_binding;
         let material_constants = self.material.constants_resource();
+        let material_textures = self.material.texture_resources();
+        let material_bindings = *self.material.bindings();
         let index_count = self.index_count;
         let pipeline = self.material.pipeline().clone();
         let vertex_shader = self.material.vertex_shader().clone();
         let pixel_shader = self.material.pixel_shader().clone();
-        let material_binding = self.material.binding();
-        let view_projection = self
-            .camera
-            .camera()
-            .view_projection_matrix()
-            .map_err(ApplicationDiagnosticError::msg)
-            .context("building the game's view-projection matrix")?;
-        let constants = encode_camera_constants(self.model, view_projection);
-        renderer
-            .write_buffer(camera_buffer, 0, &constants)
-            .map_err(ApplicationDiagnosticError::msg)
-            .context("updating the game's per-frame camera and model matrices")?;
-
         let viewport_width = exact_surface_extent(surface.width)?;
         let viewport_height = exact_surface_extent(surface.height)?;
         let mut queue = ApplicationRenderQueue::new();
         queue
             .enqueue(
-                nord_app::ApplicationRenderPassDesc::new("Nord indexed 3D mesh")
+                nord_app::ApplicationRenderPassDesc::new("Nord metallic-roughness PBR mesh")
                     .use_resource(surface.color, ApplicationResourceUsage::ColorAttachmentWrite)
                     .use_resource(surface.depth, ApplicationResourceUsage::DepthAttachmentWrite)
                     .use_resource(vertex_buffer, ApplicationResourceUsage::VertexBufferRead)
                     .use_resource(index_buffer, ApplicationResourceUsage::IndexBufferRead)
                     .use_resource(camera_buffer, ApplicationResourceUsage::ConstantBufferRead)
-                    .use_resource(material_constants, ApplicationResourceUsage::ConstantBufferRead),
+                    .use_resource(material_constants, ApplicationResourceUsage::ConstantBufferRead)
+                    .use_resource(material_textures[0], ApplicationResourceUsage::SampledRead)
+                    .use_resource(material_textures[1], ApplicationResourceUsage::SampledRead)
+                    .use_resource(material_textures[2], ApplicationResourceUsage::SampledRead),
                 move |encoder| {
                     encoder.begin_graphics_pass_with_attachments(
                         &[ApplicationColorAttachmentBinding {
@@ -266,7 +301,14 @@ impl GameRenderer {
                         &pipeline,
                         &vertex_shader,
                         &pixel_shader,
-                        &[camera_binding, material_binding],
+                        &[
+                            camera_binding,
+                            material_bindings[0],
+                            material_bindings[1],
+                            material_bindings[2],
+                            material_bindings[3],
+                            material_bindings[4],
+                        ],
                         &[ApplicationVertexBufferBinding {
                             slot: 0,
                             buffer: vertex_buffer,
@@ -293,11 +335,11 @@ impl GameRenderer {
                 },
             )
             .map_err(|error| ApplicationDiagnosticError::msg(format!("{error:?}")))
-            .context("encoding the game's indexed 3D mesh pass")?;
+            .context("encoding the game's metallic-roughness PBR mesh pass")?;
         renderer
             .submit_render_queue(&mut queue)
             .map_err(|error| ApplicationDiagnosticError::msg(format!("{error:?}")))
-            .context("submitting the game's 3D mesh render graph")?;
+            .context("submitting the game's PBR mesh render graph")?;
         renderer
             .present_texture(surface.color)
             .map_err(ApplicationDiagnosticError::msg)
@@ -408,8 +450,9 @@ fn test_cube_transform() -> nord_app::ApplicationResult<Mat4> {
         .ok_or_else(|| ApplicationDiagnosticError::msg("test cube transform is invalid"))
 }
 
-fn make_test_cube() -> nord_app::ApplicationResult<IndexedMesh> {
+fn make_test_cube() -> nord_app::ApplicationResult<GameMesh> {
     let mut vertices = Vec::with_capacity(24);
+    let mut validated_vertices = Vec::with_capacity(24);
     let mut indices = Vec::with_capacity(36);
     let faces = [
         (
@@ -470,48 +513,83 @@ fn make_test_cube() -> nord_app::ApplicationResult<IndexedMesh> {
     for (normal, corners) in faces {
         let first = u32::try_from(vertices.len())
             .map_err(|_| ApplicationDiagnosticError::msg("cube vertex index overflowed"))?;
-        for position in corners {
-            vertices.push(
-                MeshVertex::new(position, normal)
-                    .map_err(ApplicationDiagnosticError::msg)
-                    .context("validating the game's cube vertex")?,
-            );
+        let tangent = (corners[1] - corners[0])
+            .try_normalize()
+            .ok_or_else(|| ApplicationDiagnosticError::msg("cube face tangent is degenerate"))?;
+        let bitangent = (corners[3] - corners[0])
+            .try_normalize()
+            .ok_or_else(|| ApplicationDiagnosticError::msg("cube face bitangent is degenerate"))?;
+        let handedness = if normal.cross(tangent).dot(bitangent) < 0.0 { -1.0 } else { 1.0 };
+        let tex_coords = [
+            Vec2::new(0.0, 0.0),
+            Vec2::new(GAME_UV_TILE_COUNT, 0.0),
+            Vec2::new(GAME_UV_TILE_COUNT, GAME_UV_TILE_COUNT),
+            Vec2::new(0.0, GAME_UV_TILE_COUNT),
+        ];
+        for (corner_index, position) in corners.into_iter().enumerate() {
+            let validated = MeshVertex::new(position, normal)
+                .map_err(ApplicationDiagnosticError::msg)
+                .context("validating the game's cube vertex")?;
+            validated_vertices.push(validated);
+            vertices.push(GameVertex {
+                position,
+                normal,
+                tangent: Vec4::new(tangent.x, tangent.y, tangent.z, handedness),
+                tex_coord: tex_coords[corner_index],
+            });
         }
         indices.extend_from_slice(&[first, first + 1, first + 2, first, first + 2, first + 3]);
     }
-    IndexedMesh::new(vertices, indices)
+    let validated_mesh = IndexedMesh::new(validated_vertices, indices)
         .map_err(ApplicationDiagnosticError::msg)
-        .context("validating the game's indexed cube mesh")
+        .context("validating the game's indexed cube mesh")?;
+    Ok(GameMesh { validated_mesh, vertices })
 }
 
-fn encode_mesh(mesh: &IndexedMesh) -> nord_app::ApplicationResult<(Vec<u8>, Vec<u8>, u32)> {
-    let mut vertices = Vec::with_capacity(mesh.vertices().len() * VERTEX_STRIDE as usize);
-    for vertex in mesh.vertices() {
-        for value in vertex.position().to_array().into_iter().chain(vertex.normal().to_array()) {
+fn encode_mesh(mesh: &GameMesh) -> nord_app::ApplicationResult<(Vec<u8>, Vec<u8>, u32)> {
+    let mut vertices = Vec::with_capacity(mesh.vertices.len() * VERTEX_STRIDE as usize);
+    for vertex in &mesh.vertices {
+        for value in vertex
+            .position
+            .to_array()
+            .into_iter()
+            .chain(vertex.normal.to_array())
+            .chain(vertex.tangent.to_array())
+            .chain(vertex.tex_coord.to_array())
+        {
             vertices.extend_from_slice(&value.to_le_bytes());
         }
     }
-    let mut indices = Vec::with_capacity(mesh.indices().len() * 2);
-    for &index in mesh.indices() {
+    let mut indices = Vec::with_capacity(mesh.validated_mesh.indices().len() * 2);
+    for &index in mesh.validated_mesh.indices() {
         let index = u16::try_from(index)
             .map_err(|_| ApplicationDiagnosticError::msg("test mesh exceeds 16-bit indices"))?;
         indices.extend_from_slice(&index.to_le_bytes());
     }
-    let index_count = u32::try_from(mesh.indices().len())
+    let index_count = u32::try_from(mesh.validated_mesh.indices().len())
         .map_err(|_| ApplicationDiagnosticError::msg("test mesh has too many indices"))?;
     Ok((vertices, indices, index_count))
 }
 
-fn encode_camera_constants(model: Mat4, view_projection: Mat4) -> [u8; CONSTANT_BUFFER_BYTES] {
+fn encode_camera_constants(
+    model: Mat4,
+    view_projection: Mat4,
+    normal_model: Mat4,
+    camera_position: Vec3,
+) -> [u8; CONSTANT_BUFFER_BYTES] {
     let mut bytes = [0_u8; CONSTANT_BUFFER_BYTES];
     let mut offset = 0;
-    for matrix in [model, view_projection] {
+    for matrix in [model, view_projection, normal_model] {
         for column in matrix.to_cols() {
             for value in column.to_array() {
                 bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
                 offset += 4;
             }
         }
+    }
+    for value in [camera_position.x, camera_position.y, camera_position.z, 1.0] {
+        bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        offset += 4;
     }
     bytes
 }

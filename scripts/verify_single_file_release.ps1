@@ -51,7 +51,7 @@ try {
     Remove-Item Env:NORD_CONFIG_FILE -ErrorAction SilentlyContinue
     $process = Start-Process -FilePath $isolatedExe `
         -WorkingDirectory $resolvedCheckDirectory `
-        -WindowStyle Hidden `
+        -WindowStyle Minimized `
         -PassThru
 
     Start-Sleep -Seconds $StartupTimeoutSeconds

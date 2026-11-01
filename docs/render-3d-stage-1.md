@@ -15,10 +15,10 @@ e apresentação pela infraestrutura gráfica da Nord.
   encoder, render graph, depth attachment e apresentação.
 - `src/render` escolhe a câmera, cria o cubo de demonstração, atualiza seus
   dados por frame e registra o passe do jogo.
-- `src/render/material.rs` define o contrato de material do jogo, carrega e
-  compila os shaders do jogo, valida os bindings refletidos e configura o
-  pipeline opaco. `nord_render` continua oferecendo apenas compilação,
-  reflexão, pipeline, buffers e gravação de comandos genéricos.
+- `src/render/material.rs` define o contrato metallic-roughness do jogo, carrega
+  os shaders embutidos, cria mapas GPU e valida os bindings refletidos.
+  `nord_render` continua oferecendo apenas compilação, reflexão, pipeline,
+  buffers, texturas, samplers e gravação de comandos genéricos.
 - `src/camera.rs` conecta os eventos normalizados de `nord_inputs` à pose de
   `nord_camera`; as duas crates continuam sem dependência direta entre si.
 
@@ -26,32 +26,45 @@ e apresentação pela infraestrutura gráfica da Nord.
 
 1. A câmera calcula `projection * view`; o jogo combina isso com `model`.
 2. O jogo envia os vértices e índices da malha para buffers device-local.
-3. Um buffer de constantes upload, alinhado a 256 bytes, recebe as duas
-   matrizes e fica ligado ao `b0` do vertex shader. O material envia seu
-   `baseColor` linear em um segundo buffer ligado ao `b1` do pixel shader.
-4. O render graph declara os usos de color, depth, vertex, index e constants.
+3. Um buffer de constantes upload, alinhado a 256 bytes, recebe model,
+   view-projection, normal matrix e posição da câmera em `b0`. O material envia
+   fatores lineares metallic-roughness em `b1` e liga base color, metallic-
+   roughness, normal map e sampler nos slots refletidos `t0..t2/s0`.
+4. O render graph declara color, depth, vertex, index, constants e leituras
+   amostradas dos três mapas.
 5. O passe limpa color e depth, executa um draw indexado e apresenta a textura
    colorida pela swapchain.
 6. Ao mudar o tamanho da janela, o jogo recria os attachments e atualiza o
    aspect ratio da câmera. Uma superfície minimizada não é renderizada.
 
-## Material básico e forward opaco
+## Material metallic-roughness PBR
 
-`BasicOpaqueMaterialDesc` valida uma cor linear RGB finita em `0..=1`. A
-implementação do material grava essa cor em um CBV alinhado a 256 bytes; o
-shader retorna alpha `1`. O pipeline deixa blending desativado e ativa teste e
-escrita de profundidade em `D32Float`. Assim a iluminação difusa e ambiente é
-calculada diretamente no pixel shader durante o passe forward, e superfícies
-mais próximas vencem pelo depth buffer.
+`PbrMaterialDesc` recebe `base_color_linear`, `metallic_factor`,
+`roughness_factor`, `normal_scale` e `exposure`, validando valores finitos e
+seus intervalos. O jogo combina fatores e mapas como no glTF: base color RGB é
+armazenado como sRGB e decodificado pelo SRV sRGB antes da multiplicação linear;
+metallic-roughness fica em UNORM linear, roughness no canal G e metallic no B;
+o normal map fica em UNORM linear, é remapeado de `[0,1]` para tangente
+`[−1,1]`, escalado e aplicado por TBN. Os mapas da demonstração são gerados
+proceduralmente no jogo, recebem mip chains com filtragem correta em espaço
+linear para base color e renormalização de normais, e não dependem de arquivos
+externos.
 
-`assets/shaders/nord_basic_forward.hlsl` é um asset de desenvolvimento do jogo.
-O `build.rs` compila `VSMain` e `PSMain` para DXIL durante o build e grava os
-artefatos somente em `OUT_DIR`. O executável incorpora bytecode e reflexão; em
-runtime, `src/render/material.rs` os carrega e verifica que `CameraData` está
-no `b0` do vertex shader e `MaterialData` no `b1` do pixel shader. O jogador
-não precisa receber a pasta de shaders nem instalar DXC. DXC continua sendo
-ferramenta necessária para quem compila o projeto. Texturas, mapas PBR,
-materiais transparentes e batching continuam fora deste contrato inicial.
+O pixel shader usa Lambert para diffuse e Cook-Torrance com GGX, Smith e Fresnel
+de Schlick para a resposta especular. `roughness` perceptual é elevada ao
+quadrado para formar `alpha`; metallic reduz a parcela difusa e colore `F0`,
+com `0.04` para dielétricos. A iluminação inicial tem uma luz direcional e um
+preenchimento difuso hemisférico baixo; isso mantém o protótipo legível, mas
+ainda não é IBL, ambiente HDR, sombras, múltiplas luzes ou iluminação de
+produção. Radiância linear passa por tone mapping ACES e conversão linear→sRGB
+no pixel shader porque o alvo atual é `Rgba8Unorm` e a apresentação copia os
+bytes ao backbuffer.
+
+O pipeline continua opaco, com blending desligado, profundidade `D32Float` e
+sampler anisotrópico repeat. `assets/shaders/nord_pbr_forward.hlsl` é asset do
+jogo; o `build.rs` compila VS/PS para DXIL e incorpora bytecode e reflexão no
+executável. O runtime valida bindings de câmera, material, texturas e sampler;
+o jogador não precisa da pasta de shaders nem de DXC.
 
 O foco da janela, sozinho, não captura o mouse. Um clique primário dentro da
 janela focada ativa o modo de primeira pessoa: o backend Win32 esconde e mantém
@@ -62,9 +75,11 @@ capturar e converte deltas em rotação, sem dependência direta entre
 `nord_inputs`, `nord_camera` e `nord_render`. O pitch é limitado antes da
 singularidade vertical e a rotação independe do delta time do frame.
 
-O cubo usa escala uniforme e rotação, portanto transformar normais com a parte
-3×3 do modelo é válido nesta demonstração. Escala não uniforme exigirá matriz
-normal inversa-transposta antes de virar uma capacidade geral de mesh rendering.
+O shader recebe a matriz normal inversa-transposta calculada a partir do
+transform do objeto; tangentes passam pela parte linear do modelo e são
+ortogonalizadas contra a normal no vertex shader. O cubo de demonstração usa
+escala positiva. Transformações espelhadas ainda precisam inverter a
+handedness da tangente antes de serem usadas por uma malha geral.
 
 ## Referências técnicas
 
@@ -75,5 +90,7 @@ normal inversa-transposta antes de virar uma capacidade geral de mesh rendering.
 - Microsoft, [Managing Graphics Pipeline State in Direct3D 12](https://learn.microsoft.com/en-us/windows/win32/direct3d12/managing-graphics-pipeline-state-in-direct3d-12): blend, rasterizer, depth/stencil e shaders como estado imutável do pipeline.
 - Microsoft, [`D3D12_DEPTH_STENCIL_DESC`](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/ns-d3d12-d3d12_depth_stencil_desc): ativação do teste, escrita e comparação de profundidade.
 - Microsoft, [Shader Constants (HLSL)](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-constants): layout e bindings dos constant buffers usados por câmera e material.
+- Khronos, [glTF 2.0 — Metallic-Roughness Material](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#metallic-roughness-material): fatores lineares, transferência sRGB da base color e canais G/B do mapa metallic-roughness.
+- Khronos, [glTF 2.0 — BRDF implementation](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#appendix-b-brdf-implementation): GGX, Fresnel, diffuse/specular e convenções de roughness.
 - Microsoft, [Raw Input overview](https://learn.microsoft.com/en-us/windows/win32/inputdev/raw-input) e [Using Raw Input](https://learn.microsoft.com/en-us/windows/win32/inputdev/using-raw-input): recebimento de deltas de dispositivo via `WM_INPUT` e leitura com `GetRawInputData`.
 - Microsoft, [`ClipCursor`](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-clipcursor): confinamento e liberação explícita do cursor ao alternar o modo de captura.

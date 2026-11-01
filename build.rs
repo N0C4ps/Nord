@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const SHADER_SOURCE: &str = "assets/shaders/nord_basic_forward.hlsl";
+const SHADER_SOURCE: &str = "assets/shaders/nord_pbr_forward.hlsl";
 
 fn main() {
     println!("cargo:rerun-if-changed=nord.exe.manifest");
@@ -70,9 +70,9 @@ fn compile_stage(
     profile: &str,
     stage: &str,
 ) {
-    let bytecode = output_directory.join(format!("nord_basic_forward.{stage}.dxil"));
-    let reflection = output_directory.join(format!("nord_basic_forward.{stage}.reflection"));
-    let disassembly = output_directory.join(format!("nord_basic_forward.{stage}.asm"));
+    let bytecode = output_directory.join(format!("nord_pbr_forward.{stage}.dxil"));
+    let reflection = output_directory.join(format!("nord_pbr_forward.{stage}.reflection"));
+    let disassembly = output_directory.join(format!("nord_pbr_forward.{stage}.asm"));
     let mut command = Command::new(dxc);
     command
         .arg(shader)
