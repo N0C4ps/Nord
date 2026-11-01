@@ -83,46 +83,49 @@ ortogonalizadas contra a normal no vertex shader. O cubo de demonstração usa
 escala positiva. Transformações espelhadas ainda precisam inverter a
 handedness da tangente antes de serem usadas por uma malha geral.
 
-## Culling e instancing pela CPU
+## Culling e instancing GPU-driven
 
 `src/render/visibility.rs` cria uma grade de demonstração com 1.681 instâncias
-estáticas da mesma malha/material. O jogo extrai os seis planos do frustum a
-partir da matriz `projection * view` usando a convenção D3D de profundidade
-`[0, 1]`, transforma os oito cantos do AABB local para obter bounds mundiais e
-faz o teste conservador de AABB contra os planos. Bounds inválidos ou uma
-matriz que não permita extrair um frustum válido falham abertos e mantêm a
-instância visível; bounds válidos recebem uma pequena margem contra erro
-numérico.
+estáticas da mesma malha/material e extrai os seis planos do frustum da matriz
+`projection * view` usando profundidade D3D `[0, 1]`. O AABB de cada cubo é
+conservadoramente envolvido por uma esfera; o compute shader testa os seis
+planos e mantém objetos que intersectam o limite. O raio é derivado do cubo
+transformado e inclui margem conservadora.
 
-Os dados de instância (translação e tint linear) são enviados uma vez para um
-buffer de vértices device-local. A cada frame a CPU atualiza uma máscara de
-visibilidade e gera ranges contíguos ordenados por mesh/material. O command
-encoder envia draws indexados instanciados com `first_instance` e
-`instance_count`; o shader aplica translação e tint por instância. Como o
-buffer é imutável durante o runtime, a atualização da câmera não regrava dados
-que a GPU possa estar lendo.
+`src/render/gpu_driven.rs` possui a política do jogo, enquanto
+`nord_render` oferece somente buffers genéricos, SRV/UAV, compute pipelines,
+transições do render graph e `draw_indexed_indirect`. A cada frame, um primeiro
+dispatch inicializa os cinco DWORDs do comando `DRAW_INDEXED`; um segundo
+dispatch compacta em paralelo as instâncias visíveis e incrementa o contador
+de instâncias com operação atômica. O passe PBR declara o buffer compactado
+como vertex input e os argumentos como `IndirectArgumentRead`; o grafo insere
+as barreiras UAV e as transições para vertex/indirect argument antes de um
+único `ExecuteIndirect`. Os shaders DXIL e a reflexão são incorporados no
+executável, então não há arquivos de shader exigidos na máquina do jogador.
 
-O evento estruturado `cpu_visibility_instancing_metrics` registra a medição da
-câmera inicial uma vez, sem produzir log por frame. `total_instances`,
-`visible_instances` e `culled_instances` mostram o trabalho de culling;
-`naive_draw_calls` estima um draw por objeto visível e
-`instanced_draw_calls` conta os ranges realmente submetidos. `culling_ns` e
-`grouping_ns` são tempos CPU medidos com `Instant`. O script
-`scripts/verify_single_file_release.ps1` inicia o release isolado e imprime esse
-evento do log para provar que o caminho chegou ao runtime. Esses tempos medem
-somente culling e agrupamento na CPU, não o frame completo nem o tempo da GPU.
-Na execução de verificação local em Direct3D 12, a câmera inicial manteve 573
-das 1.681 instâncias e rejeitou 1.108; o envio estimado caiu de 573 draws
-individuais para 24 ranges instanciados (95,8% menos submissões), com 22,3 µs
-de culling e 1,7 µs de agrupamento nessa amostra. É uma medição pontual de
-inicialização, útil para confirmar o comportamento e comparar futuras mudanças,
-não um benchmark estatístico de performance.
+O buffer de entrada (translação e tint linear) é enviado uma vez e continua
+imutável. A capacidade do destino é o total de instâncias, e o encoder valida
+os limites de comando, índice e capacidade do vertex stream antes de gravar
+`ExecuteIndirect`. As sombras ainda fazem culling CPU com o frustum da luz, pois
+não usam a câmera; seus draws continuam agrupados por ranges instanciados.
 
-Este é um caso controlado com uma malha e um material. Os identificadores de
-mesh/material já fazem parte da chave de batch e têm teste cobrindo múltiplos
-grupos; integração posterior de meshes e materiais deve fornecer seus próprios
-buffers/pipelines antes de habilitar essas chaves na cena. Não há occlusion
-culling nesta etapa.
+O evento estruturado `cpu_visibility_instancing_metrics` mantém uma medição
+inicial da política CPU para comparação; `culling_ns` e `grouping_ns` medem
+apenas essa referência de CPU, não o frame completo nem o tempo da GPU. O evento
+`gpu_driven_path_initialized` informa a cena e esse baseline. Com
+`NORD_GPU_DRIVEN_VALIDATE=1`, o jogo faz uma leitura de retorno única dos
+argumentos escritos pela GPU e valida índice, contagem e offsets; o smoke test
+isolado exige esse evento. A leitura de retorno espera a GPU e serve apenas à
+verificação, não fica ativa durante o jogo normal e não é um benchmark de
+performance.
+
+Esta demonstração contém uma malha e um material. O culling GPU reduz a
+submissão da câmera a um comando indireto, mas ainda não prova vantagem de tempo
+de frame para cenas de produção; o custo de dispatch/atomics deve ser medido
+com timestamps GPU e cenas representativas antes de escolher esse caminho para
+todo workload. Os identificadores mesh/material já fazem parte da chave de
+batch e os testes CPU cobrem múltiplos grupos. Não há occlusion culling nesta
+etapa.
 
 ## Sombras direcionais
 
@@ -153,6 +156,9 @@ e maior qualidade de sombra.
 
 - Microsoft, [Direct3D transformation pipeline](https://learn.microsoft.com/en-us/windows/win32/dxtecharts/the-direct3d-transformation-pipeline): transformações world/view/projection, clip space homogêneo e viewport.
 - Microsoft, [`DrawIndexedInstanced`](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12graphicscommandlist-drawindexedinstanced): parâmetros do draw indexado e leitura do index buffer.
+- Microsoft, [Indirect drawing and GPU culling](https://learn.microsoft.com/en-us/windows/win32/direct3d12/indirect-drawing-and-gpu-culling-): produzir e consumir comandos indiretos com compute shaders.
+- Microsoft, [Indirect Drawing](https://learn.microsoft.com/en-us/windows/win32/direct3d12/indirect-drawing): layout de argumentos e execução com command signatures.
+- Microsoft, [Using Resource Barriers](https://learn.microsoft.com/en-us/windows/win32/direct3d12/using-resource-barriers-in-direct3d-12): transições de estado e sincronização de recursos D3D12.
 - Microsoft, [`D3D12_INPUT_ELEMENT_DESC`](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/ns-d3d12-d3d12_input_element_desc): classificação de dados por vértice ou por instância e step rate do input assembler.
 - Microsoft, [`CreateDepthStencilView`](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12device-createdepthstencilview): criação do DSV do recurso depth.
 - Microsoft, [D3D12 root signatures](https://learn.microsoft.com/en-us/windows/win32/direct3d12/creating-root-signature): descriptors e bindings refletidos pelo shader.

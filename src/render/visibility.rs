@@ -102,6 +102,14 @@ impl GameScene {
         self.instances.len()
     }
 
+    pub(super) fn conservative_instance_radius(&self) -> Option<f32> {
+        let radius = self
+            .instances
+            .iter()
+            .find_map(|instance| instance.bounds.map(|bounds| bounds.half_extents().length()))?;
+        (radius.is_finite() && radius > 0.0).then_some(radius)
+    }
+
     pub(super) fn instance_bytes(&self) -> &[u8] {
         &self.instance_data
     }
@@ -216,6 +224,10 @@ fn conservatively_expand(bounds: Aabb3) -> Option<Aabb3> {
 }
 
 fn extract_frustum(view_projection: Mat4) -> Option<Frustum3> {
+    Some(Frustum3::from_planes(extract_frustum_planes(view_projection)?))
+}
+
+pub(super) fn extract_frustum_planes(view_projection: Mat4) -> Option<[Plane3; 6]> {
     let columns = view_projection.to_cols();
     let row = [
         Vec4::new(columns[0].x, columns[1].x, columns[2].x, columns[3].x),
@@ -232,9 +244,7 @@ fn extract_frustum(view_projection: Mat4) -> Option<Frustum3> {
         row[3] - row[2],
     ];
     let planes = coefficients.map(|plane| Plane3::new(plane.truncate(), plane.w).ok());
-    Some(Frustum3::from_planes([
-        planes[0]?, planes[1]?, planes[2]?, planes[3]?, planes[4]?, planes[5]?,
-    ]))
+    Some([planes[0]?, planes[1]?, planes[2]?, planes[3]?, planes[4]?, planes[5]?])
 }
 
 fn elapsed_ns(start: Instant) -> u64 {

@@ -267,6 +267,17 @@ impl ApplicationRenderer {
         self.inner.create_texture_srv(resource).map_err(ApplicationRenderError)
     }
 
+    /// Create a raw shader-resource view over a storage buffer.
+    ///
+    /// # Errors
+    /// Returns an error for an incompatible buffer or descriptor allocation failure.
+    pub fn create_buffer_srv(
+        &mut self,
+        resource: ApplicationGpuResourceHandle,
+    ) -> Result<ApplicationDescriptorHandle, ApplicationRenderError> {
+        self.inner.create_buffer_srv(resource).map_err(ApplicationRenderError)
+    }
+
     /// Create a contiguous SRV range matching one HLSL texture array.
     ///
     /// # Errors
