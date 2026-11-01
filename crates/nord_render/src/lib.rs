@@ -1245,6 +1245,25 @@ impl Renderer {
         }
     }
 
+    /// Present a completed, surface-sized RGBA8 render target through the
+    /// swapchain. The backend performs the required state transitions and
+    /// retains GPU resources through the frame fence.
+    ///
+    /// # Errors
+    /// Returns an error when the source is stale, incompatible with the active
+    /// surface, or GPU submission/presentation fails.
+    pub fn present_texture(&mut self, source: GpuResourceHandle) -> Result<(), RenderError> {
+        #[cfg(target_os = "windows")]
+        {
+            self.backend.present_texture(source)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = source;
+            Err(RenderError::UnsupportedBackend)
+        }
+    }
+
     /// Wait until the presentation queue permits the next frame to begin.
     /// Call this before sampling frame input or advancing the simulation.
     ///

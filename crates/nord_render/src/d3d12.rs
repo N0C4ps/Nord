@@ -3580,6 +3580,103 @@ impl D3d12Renderer {
         }
     }
 
+    pub(crate) fn present_texture(
+        &mut self,
+        source_handle: GpuResourceHandle,
+    ) -> Result<(), RenderError> {
+        if self.suspended {
+            return Ok(());
+        }
+        let source_slot = self.validate_resource(source_handle)?;
+        if source_slot.kind != ResourceKind::RenderTarget
+            || source_slot.desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D
+            || source_slot.desc.Width != u64::from(self.width)
+            || source_slot.desc.Height != self.height
+            || source_slot.desc.Format != DXGI_FORMAT_R8G8B8A8_UNORM
+            || source_slot.desc.SampleDesc.Count != 1
+            || source_slot.desc.DepthOrArraySize != 1
+            || source_slot.desc.MipLevels != 1
+            || !source_slot.desc.Flags.contains(D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET)
+            || source_slot.desc.Flags.contains(D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL)
+        {
+            return Err(RenderError::Backend(
+                "present source must be a surface-sized, single-sample RGBA8 color target".into(),
+            ));
+        }
+        let source_resource = source_slot.resource.as_ref().expect("validated live source").clone();
+        let source_state = source_slot.state;
+        let source_index = source_handle.index() as usize;
+
+        // SAFETY: the frame allocator is reused only after its fence completes,
+        // both textures are surface-sized RGBA8 resources, and every state
+        // transition brackets the GPU copy before the backbuffer is presented.
+        unsafe {
+            let buffer_index = self.swapchain.GetCurrentBackBufferIndex() as usize;
+            let frame_index = self.next_frame_slot;
+            let completed = self.fence.GetCompletedValue();
+            if completed == u64::MAX {
+                return Err(RenderError::Backend("D3D12 device was removed".into()));
+            }
+            if self.frames[frame_index].fence_value > completed {
+                self.wait_for_fence(self.frames[frame_index].fence_value)?;
+            }
+            let frame = &mut self.frames[frame_index];
+            frame.upload.reset();
+            frame.allocator.Reset().map_err(backend_error)?;
+            self.command_list.Reset(&frame.allocator, None).map_err(backend_error)?;
+
+            let back_buffer = &self.back_buffers[buffer_index];
+            if source_state != D3D12_RESOURCE_STATE_COPY_SOURCE {
+                record_transition(
+                    &self.command_list,
+                    &source_resource,
+                    source_state,
+                    D3D12_RESOURCE_STATE_COPY_SOURCE,
+                );
+            }
+            record_transition(
+                &self.command_list,
+                back_buffer,
+                D3D12_RESOURCE_STATE_PRESENT,
+                D3D12_RESOURCE_STATE_COPY_DEST,
+            );
+            self.command_list.CopyResource(back_buffer, &source_resource);
+            record_transition(
+                &self.command_list,
+                back_buffer,
+                D3D12_RESOURCE_STATE_COPY_DEST,
+                D3D12_RESOURCE_STATE_PRESENT,
+            );
+            if source_state != D3D12_RESOURCE_STATE_COPY_SOURCE {
+                record_transition(
+                    &self.command_list,
+                    &source_resource,
+                    D3D12_RESOURCE_STATE_COPY_SOURCE,
+                    source_state,
+                );
+            }
+            self.command_list.Close().map_err(backend_error)?;
+            self.queue
+                .ExecuteCommandLists(&[Some(self.command_list.cast().map_err(backend_error)?)]);
+            self.swapchain
+                .Present(u32::from(self.vertical_sync), DXGI_PRESENT(0))
+                .ok()
+                .map_err(backend_error)?;
+            let fence_value = self.next_fence_value;
+            self.next_fence_value = self
+                .next_fence_value
+                .checked_add(1)
+                .ok_or_else(|| RenderError::Backend("D3D12 fence value space exhausted".into()))?;
+            self.queue.Signal(&self.fence, fence_value).map_err(backend_error)?;
+            self.frames[frame_index].fence_value = fence_value;
+            self.next_frame_slot = (frame_index + 1) % self.frames.len();
+        }
+        if let Some(slot) = self.resources.get_mut(source_index) {
+            slot.state = source_state;
+        }
+        Ok(())
+    }
+
     pub(crate) fn resize(&mut self, width: u32, height: u32) -> Result<(), RenderError> {
         if width == 0 || height == 0 {
             self.suspended = true;

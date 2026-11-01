@@ -131,6 +131,18 @@ impl ApplicationRenderer {
         self.inner.render_frame(clear_color).map_err(ApplicationRenderError)
     }
 
+    /// Present a completed surface-sized RGBA8 texture through the swapchain.
+    ///
+    /// # Errors
+    /// Returns an error when the texture is incompatible with the surface or
+    /// GPU submission/presentation fails.
+    pub fn present_texture(
+        &mut self,
+        source: ApplicationGpuResourceHandle,
+    ) -> Result<(), ApplicationRenderError> {
+        self.inner.present_texture(source).map_err(ApplicationRenderError)
+    }
+
     /// Wait for DXGI frame readiness before input and simulation work.
     ///
     /// # Errors
