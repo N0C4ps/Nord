@@ -8,23 +8,29 @@ use crate::{
 use raw_window_handle::{RawWindowHandle, Win32WindowHandle};
 use std::collections::HashMap;
 use std::ffi::c_void;
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, OnceLock};
 use windows_sys::Win32::Foundation::{GetLastError, HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows_sys::Win32::Graphics::Gdi::{HBRUSH, UpdateWindow};
+use windows_sys::Win32::Graphics::Gdi::{ClientToScreen, HBRUSH, UpdateWindow};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
 };
+use windows_sys::Win32::UI::Input::{
+    GetRawInputData, RAWINPUT, RAWINPUTDEVICE, RAWINPUTHEADER, RID_INPUT, RIDEV_REMOVE,
+    RIM_TYPEMOUSE, RegisterRawInputDevices,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW,
-    DestroyWindow, DispatchMessageW, GWLP_USERDATA, GetWindowLongPtrW, IDC_ARROW, LoadCursorW, MSG,
-    PM_REMOVE, PeekMessageW, RegisterClassExW, SW_HIDE, SW_SHOW, SWP_NOACTIVATE, SWP_NOZORDER,
-    SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, WHEEL_DELTA, WM_CLOSE,
-    WM_DPICHANGED, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE,
-    WM_NCDESTROY, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETFOCUS, WM_SIZE, WM_SYSKEYDOWN, WM_SYSKEYUP,
-    WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSEXW, WS_MAXIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_THICKFRAME,
-    WS_VISIBLE, XBUTTON1,
+    DestroyWindow, DispatchMessageW, GWLP_USERDATA, GetClientRect, GetCursorPos, GetWindowLongPtrW,
+    HTCLIENT, IDC_ARROW, LoadCursorW, MSG, PM_REMOVE, PeekMessageW, RegisterClassExW, SW_HIDE,
+    SW_SHOW, SWP_NOACTIVATE, SWP_NOZORDER, SetCursor, SetCursorPos, SetWindowLongPtrW,
+    SetWindowPos, ShowWindow, TranslateMessage, WHEEL_DELTA, WM_CLOSE, WM_DPICHANGED, WM_INPUT,
+    WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP,
+    WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_RBUTTONDOWN,
+    WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SIZE, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDOWN,
+    WM_XBUTTONUP, WNDCLASSEXW, WS_MAXIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_THICKFRAME, WS_VISIBLE,
+    XBUTTON1,
 };
 
 const CLASS_NAME: &[u16] = &[78, 111, 114, 100, 84, 101, 99, 104, 87, 105, 110, 100, 111, 119, 0];
@@ -33,6 +39,9 @@ struct WindowContext {
     handle: WindowHandle,
     events: EventEmitter,
     native_reference_released: std::sync::atomic::AtomicBool,
+    cursor_locked: AtomicBool,
+    saved_cursor: [AtomicI32; 2],
+    has_saved_cursor: AtomicBool,
 }
 
 struct WindowRecord {
@@ -63,6 +72,9 @@ impl WindowsWindowBackend {
             handle,
             events: events.clone(),
             native_reference_released: std::sync::atomic::AtomicBool::new(false),
+            cursor_locked: AtomicBool::new(false),
+            saved_cursor: [AtomicI32::new(0), AtomicI32::new(0)],
+            has_saved_cursor: AtomicBool::new(false),
         });
         // The raw Arc is transferred to the HWND and released by WM_NCDESTROY.
         let native_context = Arc::into_raw(Arc::clone(&context));
@@ -151,6 +163,72 @@ impl WindowsWindowBackend {
         Ok(())
     }
 
+    pub(crate) fn set_cursor_locked(
+        &mut self,
+        handle: WindowHandle,
+        locked: bool,
+    ) -> Result<(), WindowError> {
+        let record = self.windows.get(&handle).ok_or(WindowError::UnknownHandle)?;
+        let hwnd = record.hwnd as HWND;
+        let context = &record.context;
+        if locked {
+            if !context.cursor_locked.load(Ordering::Acquire) {
+                let mut saved = windows_sys::Win32::Foundation::POINT::default();
+                // SAFETY: `saved` points to writable storage for the current desktop position.
+                if unsafe { GetCursorPos(&raw mut saved) } == 0 {
+                    return Err(native_error("GetCursorPos"));
+                }
+                context.saved_cursor[0].store(saved.x, Ordering::Relaxed);
+                context.saved_cursor[1].store(saved.y, Ordering::Relaxed);
+                context.has_saved_cursor.store(true, Ordering::Release);
+            }
+
+            let device =
+                RAWINPUTDEVICE { usUsagePage: 0x01, usUsage: 0x02, dwFlags: 0, hwndTarget: hwnd };
+            // SAFETY: device is initialized and its mouse usage/target are valid.
+            if unsafe {
+                RegisterRawInputDevices(
+                    &raw const device,
+                    1,
+                    u32::try_from(std::mem::size_of::<RAWINPUTDEVICE>()).unwrap_or(u32::MAX),
+                )
+            } == 0
+            {
+                context.has_saved_cursor.store(false, Ordering::Release);
+                return Err(native_error("RegisterRawInputDevices"));
+            }
+            let (clip, center) = match cursor_geometry(hwnd) {
+                Ok(geometry) => geometry,
+                Err(error) => {
+                    unregister_raw_mouse();
+                    context.has_saved_cursor.store(false, Ordering::Release);
+                    return Err(error);
+                }
+            };
+            // SAFETY: clip is a valid screen-space RECT and remains valid for the call.
+            if unsafe { windows_sys::Win32::UI::WindowsAndMessaging::ClipCursor(&raw const clip) }
+                == 0
+            {
+                unregister_raw_mouse();
+                context.has_saved_cursor.store(false, Ordering::Release);
+                return Err(native_error("ClipCursor"));
+            }
+            // Set state before moving so WM_SETCURSOR immediately hides the cursor.
+            context.cursor_locked.store(true, Ordering::Release);
+            // SAFETY: center is a desktop pixel within this window's client rect.
+            if unsafe { SetCursorPos(center.x, center.y) } == 0 {
+                release_cursor(hwnd, context, true);
+                return Err(native_error("SetCursorPos"));
+            }
+            // SAFETY: a null cursor intentionally hides it while captured; WM_SETCURSOR reapplies it.
+            unsafe { SetCursor(std::ptr::null_mut()) };
+            Ok(())
+        } else {
+            release_cursor(hwnd, context, true);
+            Ok(())
+        }
+    }
+
     pub(crate) fn pump_messages(&mut self) {
         let mut message = MSG::default();
         // PeekMessageW with PM_REMOVE pumps all current messages without waiting for input.
@@ -216,6 +294,7 @@ fn native_error(operation: &'static str) -> WindowError {
     WindowError::Native { operation, code: unsafe { GetLastError() } }
 }
 
+#[allow(clippy::too_many_lines)] // Native messages share this single Win32 dispatch boundary.
 unsafe extern "system" fn window_proc(
     hwnd: HWND,
     message: u32,
@@ -254,8 +333,20 @@ unsafe extern "system" fn window_proc(
                     window: context.handle,
                     event: WindowEvent::Resized { width, height },
                 });
+                if context.cursor_locked.load(Ordering::Acquire)
+                    && let Ok((clip, center)) = cursor_geometry(hwnd)
+                {
+                    // SAFETY: the client bounds and center were converted to desktop coordinates.
+                    unsafe {
+                        windows_sys::Win32::UI::WindowsAndMessaging::ClipCursor(&raw const clip);
+                        SetCursorPos(center.x, center.y);
+                    }
+                }
             }
             WM_SETFOCUS | WM_KILLFOCUS => {
+                if message == WM_KILLFOCUS {
+                    release_cursor(hwnd, context, true);
+                }
                 let _ = context.events.emit(PlatformEventKind::Window {
                     window: context.handle,
                     event: WindowEvent::FocusChanged { focused: message == WM_SETFOCUS },
@@ -270,6 +361,26 @@ unsafe extern "system" fn window_proc(
             }
             WM_KEYDOWN | WM_KEYUP | WM_SYSKEYDOWN | WM_SYSKEYUP => {
                 emit_keyboard_input(context, message, wparam, lparam);
+            }
+            WM_INPUT => {
+                if context.cursor_locked.load(Ordering::Acquire) {
+                    emit_raw_mouse_delta(context, lparam);
+                    if let Ok((_, center)) = cursor_geometry(hwnd) {
+                        // SAFETY: center is a valid desktop location inside this client area.
+                        unsafe { SetCursorPos(center.x, center.y) };
+                    }
+                }
+            }
+            WM_SETCURSOR
+                if context.cursor_locked.load(Ordering::Acquire)
+                    && u32::from(u16::from_ne_bytes([
+                        lparam.to_ne_bytes()[0],
+                        lparam.to_ne_bytes()[1],
+                    ])) == HTCLIENT =>
+            {
+                // SAFETY: null is the documented way to suppress the cursor image.
+                unsafe { SetCursor(std::ptr::null_mut()) };
+                return 1;
             }
             WM_MOUSEMOVE | WM_LBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_RBUTTONUP
             | WM_MBUTTONDOWN | WM_MBUTTONUP | WM_XBUTTONDOWN | WM_XBUTTONUP | WM_MOUSEWHEEL
@@ -300,6 +411,7 @@ unsafe extern "system" fn window_proc(
                 }
             }
             WM_NCDESTROY => {
+                release_cursor(hwnd, context, true);
                 // Clear before dropping the native strong reference so reentrant messages cannot observe it.
                 // SAFETY: hwnd is live during WM_NCDESTROY and the slot contains our Arc pointer.
                 unsafe {
@@ -317,6 +429,110 @@ unsafe extern "system" fn window_proc(
     }
     // SAFETY: default processing preserves standard Win32 behavior for every unhandled message.
     unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+}
+
+fn cursor_geometry(
+    hwnd: HWND,
+) -> Result<(RECT, windows_sys::Win32::Foundation::POINT), WindowError> {
+    let mut client = RECT::default();
+    // SAFETY: client is writable and hwnd is the live window being processed.
+    if unsafe { GetClientRect(hwnd, &raw mut client) } == 0 {
+        return Err(native_error("GetClientRect"));
+    }
+    if client.right <= client.left || client.bottom <= client.top {
+        return Err(WindowError::InvalidDimensions);
+    }
+    let mut top_left = windows_sys::Win32::Foundation::POINT { x: client.left, y: client.top };
+    let mut bottom_right =
+        windows_sys::Win32::Foundation::POINT { x: client.right, y: client.bottom };
+    // SAFETY: both points are valid client coordinates and become screen coordinates on success.
+    if unsafe { ClientToScreen(hwnd, &raw mut top_left) } == 0
+        || unsafe { ClientToScreen(hwnd, &raw mut bottom_right) } == 0
+    {
+        return Err(native_error("ClientToScreen"));
+    }
+    let center = windows_sys::Win32::Foundation::POINT {
+        x: top_left.x + (bottom_right.x - top_left.x) / 2,
+        y: top_left.y + (bottom_right.y - top_left.y) / 2,
+    };
+    Ok((
+        RECT { left: top_left.x, top: top_left.y, right: bottom_right.x, bottom: bottom_right.y },
+        center,
+    ))
+}
+
+fn unregister_raw_mouse() {
+    let device = RAWINPUTDEVICE {
+        usUsagePage: 0x01,
+        usUsage: 0x02,
+        dwFlags: RIDEV_REMOVE,
+        hwndTarget: std::ptr::null_mut(),
+    };
+    // SAFETY: RIDEV_REMOVE requires a null target and removes this process's mouse registration.
+    unsafe {
+        RegisterRawInputDevices(
+            &raw const device,
+            1,
+            u32::try_from(std::mem::size_of::<RAWINPUTDEVICE>()).unwrap_or(u32::MAX),
+        );
+    }
+}
+
+fn release_cursor(hwnd: HWND, context: &WindowContext, restore_position: bool) {
+    let was_locked = context.cursor_locked.swap(false, Ordering::AcqRel);
+    if was_locked {
+        // SAFETY: null releases the process-wide clipping rectangle as required by Win32.
+        unsafe { windows_sys::Win32::UI::WindowsAndMessaging::ClipCursor(std::ptr::null()) };
+        unregister_raw_mouse();
+        if restore_position && context.has_saved_cursor.swap(false, Ordering::AcqRel) {
+            // SAFETY: coordinates were saved from GetCursorPos on capture.
+            unsafe {
+                SetCursorPos(
+                    context.saved_cursor[0].load(Ordering::Relaxed),
+                    context.saved_cursor[1].load(Ordering::Relaxed),
+                );
+            }
+        } else {
+            context.has_saved_cursor.store(false, Ordering::Release);
+        }
+        // SAFETY: restore the standard arrow used by the registered window class.
+        unsafe { SetCursor(LoadCursorW(std::ptr::null_mut(), IDC_ARROW)) };
+        let _ = hwnd;
+    }
+}
+
+fn emit_raw_mouse_delta(context: &WindowContext, raw_handle: LPARAM) {
+    let mut raw = std::mem::MaybeUninit::<RAWINPUT>::zeroed();
+    let mut size = u32::try_from(std::mem::size_of::<RAWINPUT>()).unwrap_or(u32::MAX);
+    // SAFETY: RAWINPUT is DWORD aligned and size describes its writable storage; lParam is the WM_INPUT handle.
+    let read = unsafe {
+        GetRawInputData(
+            raw_handle as windows_sys::Win32::UI::Input::HRAWINPUT,
+            RID_INPUT,
+            raw.as_mut_ptr().cast(),
+            &raw mut size,
+            u32::try_from(std::mem::size_of::<RAWINPUTHEADER>()).unwrap_or(u32::MAX),
+        )
+    };
+    if read == u32::MAX || usize::try_from(read).unwrap_or(0) < std::mem::size_of::<RAWINPUT>() {
+        return;
+    }
+    // SAFETY: GetRawInputData returned at least the full RAWINPUT size above.
+    let raw = unsafe { raw.assume_init() };
+    if raw.header.dwType != RIM_TYPEMOUSE {
+        return;
+    }
+    // SAFETY: dwType == RIM_TYPEMOUSE selects the mouse member of the RAWINPUT union.
+    let mouse = unsafe { raw.data.mouse };
+    let delta_x = f64::from(mouse.lLastX);
+    let delta_y = f64::from(mouse.lLastY);
+    if delta_x != 0.0 || delta_y != 0.0 {
+        let _ = context.events.emit(PlatformEventKind::Input(InputEvent::PointerDelta {
+            window: context.handle,
+            delta_x,
+            delta_y,
+        }));
+    }
 }
 
 fn emit_keyboard_input(context: &WindowContext, message: u32, wparam: WPARAM, lparam: LPARAM) {

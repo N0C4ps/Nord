@@ -228,6 +228,31 @@ impl WindowSystem {
         }
     }
 
+    /// Confine and hide the pointer while emitting relative motion for a window.
+    ///
+    /// Unlocking restores the pointer position captured when locking began.
+    /// The native backend releases capture automatically when the window loses focus.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WindowError::WrongThread`], [`WindowError::UnknownHandle`],
+    /// [`WindowError::Unsupported`], or a native API failure.
+    pub fn set_cursor_locked(&self, handle: WindowHandle, locked: bool) -> Result<(), WindowError> {
+        self.check_thread()?;
+        #[cfg(target_os = "windows")]
+        {
+            self.backend
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .set_cursor_locked(handle, locked)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = (handle, locked);
+            Err(WindowError::Unsupported)
+        }
+    }
+
     /// Return the native window token for an engine-owned graphics backend.
     /// This is an integration hook; game code should use the `nord_app` facade.
     #[doc(hidden)]

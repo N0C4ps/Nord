@@ -12,10 +12,26 @@ pub enum InputEvent {
     Key { window: WindowHandle, key: KeyCode, pressed: bool, repeat: bool, modifiers: Modifiers },
     /// Pointer moved in client-area physical pixels.
     PointerMoved { window: WindowHandle, x: f64, y: f64 },
+    /// Relative pointer movement in device units, for captured pointer modes.
+    PointerDelta { window: WindowHandle, delta_x: f64, delta_y: f64 },
     /// A pointer button changed state.
     PointerButton { window: WindowHandle, button: PointerButton, pressed: bool },
     /// A pointer wheel delta. One whole unit equals one standard wheel detent.
     PointerWheel { window: WindowHandle, delta_x: f64, delta_y: f64 },
+}
+
+impl InputEvent {
+    /// Window that produced this event.
+    #[must_use]
+    pub const fn window(&self) -> WindowHandle {
+        match self {
+            Self::Key { window, .. }
+            | Self::PointerMoved { window, .. }
+            | Self::PointerDelta { window, .. }
+            | Self::PointerButton { window, .. }
+            | Self::PointerWheel { window, .. } => *window,
+        }
+    }
 }
 
 /// Normalized virtual key used for gameplay bindings.
@@ -136,6 +152,7 @@ impl InputSystem {
             let window = match &event {
                 InputEvent::Key { window, .. }
                 | InputEvent::PointerMoved { window, .. }
+                | InputEvent::PointerDelta { window, .. }
                 | InputEvent::PointerButton { window, .. }
                 | InputEvent::PointerWheel { window, .. } => *window,
             };

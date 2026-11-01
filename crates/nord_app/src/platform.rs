@@ -206,6 +206,23 @@ impl ApplicationPlatform {
         self.inner.set_window_visible(handle, visible)
     }
 
+    /// Lock or release the pointer for a game-owned first-person input mode.
+    ///
+    /// The platform supplies relative motion and restores the cursor when
+    /// released; game code decides when capture starts and stops.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApplicationWindowError`] for unsupported backends, wrong-thread
+    /// access, unknown windows, or native failures.
+    pub fn set_cursor_locked(
+        &self,
+        handle: ApplicationWindowHandle,
+        locked: bool,
+    ) -> Result<(), ApplicationWindowError> {
+        self.inner.set_cursor_locked(handle, locked)
+    }
+
     pub(crate) fn native_window_handle(
         &self,
         handle: ApplicationWindowHandle,
