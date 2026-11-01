@@ -742,6 +742,25 @@ impl Renderer {
         }
     }
 
+    /// Create a raw SRV for a device-local storage buffer.
+    ///
+    /// # Errors
+    /// Returns an error for non-storage buffers, invalid raw alignment, or descriptor exhaustion.
+    pub fn create_buffer_srv(
+        &mut self,
+        resource: GpuResourceHandle,
+    ) -> Result<DescriptorHandle, RenderError> {
+        #[cfg(target_os = "windows")]
+        {
+            self.backend.create_buffer_srv(&mut self.services, resource)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = resource;
+            Err(RenderError::UnsupportedBackend)
+        }
+    }
+
     /// Create a contiguous SRV descriptor range for one reflected HLSL array.
     ///
     /// # Errors

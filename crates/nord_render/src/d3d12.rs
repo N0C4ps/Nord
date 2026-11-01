@@ -19,18 +19,19 @@ use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND};
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 use windows::Win32::Graphics::Direct3D12::{
     D3D_ROOT_SIGNATURE_VERSION_1, D3D12_BLEND_DESC, D3D12_BLEND_INV_SRC_ALPHA, D3D12_BLEND_ONE,
-    D3D12_BLEND_OP_ADD, D3D12_BLEND_SRC_ALPHA, D3D12_BLEND_ZERO, D3D12_BUFFER_UAV,
-    D3D12_BUFFER_UAV_FLAG_RAW, D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC,
+    D3D12_BLEND_OP_ADD, D3D12_BLEND_SRC_ALPHA, D3D12_BLEND_ZERO, D3D12_BUFFER_SRV,
+    D3D12_BUFFER_SRV_FLAG_RAW, D3D12_BUFFER_UAV, D3D12_BUFFER_UAV_FLAG_RAW,
+    D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC, D3D12_COMMAND_SIGNATURE_DESC,
     D3D12_COMPARISON_FUNC_ALWAYS, D3D12_COMPUTE_PIPELINE_STATE_DESC,
     D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF, D3D12_CONSTANT_BUFFER_VIEW_DESC,
     D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_CPU_PAGE_PROPERTY_UNKNOWN, D3D12_CULL_MODE_BACK,
     D3D12_CULL_MODE_FRONT, D3D12_CULL_MODE_NONE, D3D12_DEFAULT_DEPTH_BIAS,
-    D3D12_DEFAULT_DEPTH_BIAS_CLAMP, D3D12_DEFAULT_SLOPE_SCALED_DEPTH_BIAS,
-    D3D12_DEPTH_STENCIL_DESC, D3D12_DEPTH_STENCILOP_DESC, D3D12_DEPTH_WRITE_MASK_ALL,
-    D3D12_DEPTH_WRITE_MASK_ZERO, D3D12_DESCRIPTOR_HEAP_DESC, D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
-    D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
-    D3D12_DESCRIPTOR_HEAP_TYPE_DSV, D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
-    D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, D3D12_DESCRIPTOR_RANGE,
+    D3D12_DEFAULT_DEPTH_BIAS_CLAMP, D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+    D3D12_DEFAULT_SLOPE_SCALED_DEPTH_BIAS, D3D12_DEPTH_STENCIL_DESC, D3D12_DEPTH_STENCILOP_DESC,
+    D3D12_DEPTH_WRITE_MASK_ALL, D3D12_DEPTH_WRITE_MASK_ZERO, D3D12_DESCRIPTOR_HEAP_DESC,
+    D3D12_DESCRIPTOR_HEAP_FLAG_NONE, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE,
+    D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, D3D12_DESCRIPTOR_HEAP_TYPE_DSV,
+    D3D12_DESCRIPTOR_HEAP_TYPE_RTV, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, D3D12_DESCRIPTOR_RANGE,
     D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND, D3D12_DESCRIPTOR_RANGE_TYPE_CBV,
     D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER, D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
     D3D12_DESCRIPTOR_RANGE_TYPE_UAV, D3D12_FENCE_FLAG_NONE, D3D12_FILL_MODE_SOLID,
@@ -39,7 +40,8 @@ use windows::Win32::Graphics::Direct3D12::{
     D3D12_HEAP_FLAG_ALLOW_ONLY_BUFFERS, D3D12_HEAP_FLAG_ALLOW_ONLY_NON_RT_DS_TEXTURES,
     D3D12_HEAP_FLAG_ALLOW_ONLY_RT_DS_TEXTURES, D3D12_HEAP_FLAG_NONE, D3D12_HEAP_PROPERTIES,
     D3D12_HEAP_TYPE_DEFAULT, D3D12_HEAP_TYPE_READBACK, D3D12_HEAP_TYPE_UPLOAD,
-    D3D12_INDEX_BUFFER_VIEW, D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA,
+    D3D12_INDEX_BUFFER_VIEW, D3D12_INDIRECT_ARGUMENT_DESC,
+    D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED, D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA,
     D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, D3D12_INPUT_ELEMENT_DESC, D3D12_INPUT_LAYOUT_DESC,
     D3D12_LOGIC_OP_NOOP, D3D12_MEMORY_POOL_UNKNOWN, D3D12_PLACED_SUBRESOURCE_FOOTPRINT,
     D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE, D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT,
@@ -53,23 +55,25 @@ use windows::Win32::Graphics::Direct3D12::{
     D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_FLAG_NONE,
     D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE,
     D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_STATE_INDEX_BUFFER,
-    D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET,
-    D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, D3D12_RESOURCE_STATES,
-    D3D12_RESOURCE_TRANSITION_BARRIER, D3D12_RESOURCE_UAV_BARRIER, D3D12_ROOT_DESCRIPTOR_TABLE,
-    D3D12_ROOT_PARAMETER, D3D12_ROOT_PARAMETER_0, D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-    D3D12_ROOT_SIGNATURE_DESC, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
-    D3D12_SAMPLER_DESC, D3D12_SHADER_BYTECODE, D3D12_SHADER_VISIBILITY_ALL,
-    D3D12_SHADER_VISIBILITY_PIXEL, D3D12_SHADER_VISIBILITY_VERTEX, D3D12_STENCIL_OP_KEEP,
-    D3D12_TEX2D_ARRAY_UAV, D3D12_TEX2D_UAV, D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-    D3D12_TEXTURE_ADDRESS_MODE_MIRROR, D3D12_TEXTURE_ADDRESS_MODE_WRAP,
-    D3D12_TEXTURE_COPY_LOCATION, D3D12_TEXTURE_COPY_LOCATION_0,
+    D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, D3D12_RESOURCE_STATE_PRESENT,
+    D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
+    D3D12_RESOURCE_STATES, D3D12_RESOURCE_TRANSITION_BARRIER, D3D12_RESOURCE_UAV_BARRIER,
+    D3D12_ROOT_DESCRIPTOR_TABLE, D3D12_ROOT_PARAMETER, D3D12_ROOT_PARAMETER_0,
+    D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE, D3D12_ROOT_SIGNATURE_DESC,
+    D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT, D3D12_SAMPLER_DESC,
+    D3D12_SHADER_BYTECODE, D3D12_SHADER_RESOURCE_VIEW_DESC, D3D12_SHADER_RESOURCE_VIEW_DESC_0,
+    D3D12_SHADER_VISIBILITY_ALL, D3D12_SHADER_VISIBILITY_PIXEL, D3D12_SHADER_VISIBILITY_VERTEX,
+    D3D12_SRV_DIMENSION_BUFFER, D3D12_STENCIL_OP_KEEP, D3D12_TEX2D_ARRAY_UAV, D3D12_TEX2D_UAV,
+    D3D12_TEXTURE_ADDRESS_MODE_CLAMP, D3D12_TEXTURE_ADDRESS_MODE_MIRROR,
+    D3D12_TEXTURE_ADDRESS_MODE_WRAP, D3D12_TEXTURE_COPY_LOCATION, D3D12_TEXTURE_COPY_LOCATION_0,
     D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
     D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_TEXTURE_LAYOUT_UNKNOWN, D3D12_UAV_DIMENSION_BUFFER,
     D3D12_UAV_DIMENSION_TEXTURE2D, D3D12_UAV_DIMENSION_TEXTURE2DARRAY,
     D3D12_UNORDERED_ACCESS_VIEW_DESC, D3D12_UNORDERED_ACCESS_VIEW_DESC_0, D3D12_VERTEX_BUFFER_VIEW,
     D3D12CreateDevice, D3D12SerializeRootSignature, ID3D12CommandAllocator, ID3D12CommandQueue,
-    ID3D12DescriptorHeap, ID3D12Device, ID3D12Fence, ID3D12GraphicsCommandList, ID3D12Heap,
-    ID3D12PipelineState, ID3D12Resource, ID3D12RootSignature,
+    ID3D12CommandSignature, ID3D12DescriptorHeap, ID3D12Device, ID3D12Fence,
+    ID3D12GraphicsCommandList, ID3D12Heap, ID3D12PipelineState, ID3D12Resource,
+    ID3D12RootSignature,
 };
 #[cfg(debug_assertions)]
 use windows::Win32::Graphics::Direct3D12::{D3D12GetDebugInterface, ID3D12Debug};
@@ -344,6 +348,7 @@ pub(crate) struct D3d12Renderer {
     dsv_increment: u32,
     pipelines: HashMap<PipelineKey, NativePipeline>,
     compute_pipelines: HashMap<crate::ShaderId, NativePipeline>,
+    indexed_draw_command_signature: ID3D12CommandSignature,
     graph_submission_active: bool,
     inflight_pass_lists: Vec<(ID3D12CommandAllocator, ID3D12GraphicsCommandList)>,
     record_only: bool,
@@ -381,6 +386,7 @@ impl D3d12Renderer {
             dsv_increment: self.dsv_increment,
             pipelines: self.pipelines.clone(),
             compute_pipelines: self.compute_pipelines.clone(),
+            indexed_draw_command_signature: self.indexed_draw_command_signature.clone(),
             graph_submission_active: true,
             inflight_pass_lists: Vec::new(),
             record_only: true,
@@ -487,7 +493,7 @@ impl D3d12Renderer {
             class,
             state,
             ResourceKind::Buffer,
-            false,
+            desc.usage().contains(BufferUsage::STORAGE),
             Some(desc.usage()),
             Some(desc.memory()),
             desc.size(),
@@ -739,6 +745,53 @@ impl D3d12Renderer {
         // SAFETY: the resource is a live texture and the slot belongs to the
         // renderer's stable shader-visible CBV/SRV/UAV descriptor heap.
         unsafe { self.device.CreateShaderResourceView(&resource, None, cpu) };
+        self.resources[handle.index() as usize]
+            .descriptors
+            .push((descriptor, NativeViewKind::ShaderResource));
+        Ok(descriptor)
+    }
+
+    pub(crate) fn create_buffer_srv(
+        &mut self,
+        services: &mut RenderServices,
+        handle: GpuResourceHandle,
+    ) -> Result<DescriptorHandle, RenderError> {
+        let slot = self.validate_resource(handle)?;
+        if slot.kind != ResourceKind::Buffer
+            || !slot.shader_resource
+            || !slot.buffer_usage.is_some_and(|usage| usage.contains(BufferUsage::STORAGE))
+            || !slot.byte_size.is_multiple_of(4)
+        {
+            return Err(RenderError::Backend(
+                "raw buffer SRV creation requires a four-byte-aligned storage buffer".into(),
+            ));
+        }
+        let resource = slot.resource.as_ref().expect("validated live resource").clone();
+        let descriptor =
+            services.descriptors().allocate(DescriptorKind::Resource).ok_or_else(|| {
+                RenderError::Backend("shader-visible resource descriptor heap is full".into())
+            })?;
+        let heap = unsafe { self.resource_descriptor_heap.GetCPUDescriptorHandleForHeapStart() };
+        let cpu = D3D12_CPU_DESCRIPTOR_HANDLE {
+            ptr: heap.ptr
+                + descriptor.index() as usize * self.resource_descriptor_increment as usize,
+        };
+        let desc = D3D12_SHADER_RESOURCE_VIEW_DESC {
+            Format: DXGI_FORMAT_R32_TYPELESS,
+            ViewDimension: D3D12_SRV_DIMENSION_BUFFER,
+            Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+            Anonymous: D3D12_SHADER_RESOURCE_VIEW_DESC_0 {
+                Buffer: D3D12_BUFFER_SRV {
+                    FirstElement: 0,
+                    NumElements: u32::try_from(slot.byte_size / 4).map_err(backend_error)?,
+                    StructureByteStride: 0,
+                    Flags: D3D12_BUFFER_SRV_FLAG_RAW,
+                },
+            },
+        };
+        // SAFETY: the live storage buffer is four-byte aligned and the raw SRV
+        // covers exactly the validated buffer byte range.
+        unsafe { self.device.CreateShaderResourceView(&resource, Some(&raw const desc), cpu) };
         self.resources[handle.index() as usize]
             .descriptors
             .push((descriptor, NativeViewKind::ShaderResource));
@@ -1382,6 +1435,7 @@ impl D3d12Renderer {
                     first_vertex: 0,
                     first_instance: 0,
                 },
+                indirect: None,
             }],
         };
         self.execute_graphics_pass_batch(services, &pass)
@@ -1614,26 +1668,33 @@ impl D3d12Renderer {
                     .find(|attribute| attribute.input_slot == binding.slot)
                     .filter(|attribute| attribute.per_instance)
                     .map(|attribute| attribute.instance_step_rate);
-                let required_elements = match (draw.call, instance_step) {
-                    (DrawCall::Vertices { vertex_count, first_vertex, .. }, None) => {
-                        Some(first_vertex.checked_add(vertex_count).ok_or_else(|| {
-                            RenderError::Backend("vertex draw range overflow".into())
-                        })?)
-                    }
-                    (
-                        DrawCall::Vertices { instance_count, first_instance, .. }
-                        | DrawCall::Indexed { instance_count, first_instance, .. },
-                        Some(step_rate),
-                    ) => Some(
-                        first_instance
-                            .checked_add(instance_count)
-                            .ok_or_else(|| {
-                                RenderError::Backend("instance draw range overflow".into())
-                            })?
-                            .div_ceil(step_rate),
-                    ),
-                    (DrawCall::Indexed { .. }, None) => None,
-                };
+                let required_elements =
+                    if let (Some(indirect), Some(step_rate)) = (draw.indirect, instance_step) {
+                        Some(indirect.maximum_instances.div_ceil(step_rate))
+                    } else if draw.indirect.is_some() {
+                        None
+                    } else {
+                        match (draw.call, instance_step) {
+                            (DrawCall::Vertices { vertex_count, first_vertex, .. }, None) => {
+                                Some(first_vertex.checked_add(vertex_count).ok_or_else(|| {
+                                    RenderError::Backend("vertex draw range overflow".into())
+                                })?)
+                            }
+                            (
+                                DrawCall::Vertices { instance_count, first_instance, .. }
+                                | DrawCall::Indexed { instance_count, first_instance, .. },
+                                Some(step_rate),
+                            ) => Some(
+                                first_instance
+                                    .checked_add(instance_count)
+                                    .ok_or_else(|| {
+                                        RenderError::Backend("instance draw range overflow".into())
+                                    })?
+                                    .div_ceil(step_rate),
+                            ),
+                            (DrawCall::Indexed { .. }, None) => None,
+                        }
+                    };
                 if required_elements.is_some_and(|elements| {
                     u64::from(elements) * u64::from(binding.stride) > u64::from(binding.size)
                 }) {
@@ -1680,6 +1741,37 @@ impl D3d12Renderer {
                     ));
                 }
                 (DrawCall::Vertices { .. }, None) => {}
+            }
+            if let Some(indirect) = draw.indirect {
+                let slot = self.validate_resource(indirect.resource)?;
+                let index = draw.index_buffer.expect("indirect draws are indexed");
+                let index_element_size = match index.format {
+                    IndexFormat::Uint16 => 2_u64,
+                    IndexFormat::Uint32 => 4_u64,
+                };
+                let end = indirect
+                    .offset
+                    .checked_add(u64::from(indirect.maximum_commands) * 20)
+                    .ok_or_else(|| {
+                        RenderError::Backend("indirect argument range overflow".into())
+                    })?;
+                if slot.kind != ResourceKind::Buffer
+                    || !slot
+                        .buffer_usage
+                        .is_some_and(|usage| usage.contains(BufferUsage::INDIRECT_ARGUMENT))
+                    || end > slot.byte_size
+                    || u64::from(indirect.maximum_indices)
+                        > u64::from(index.size) / index_element_size
+                    || !indirect.offset.is_multiple_of(4)
+                    || !matches!(
+                        slot.state,
+                        D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT | D3D12_RESOURCE_STATE_GENERIC_READ
+                    )
+                {
+                    return Err(RenderError::Backend(
+                        "indirect argument buffer, range, usage or state is invalid".into(),
+                    ));
+                }
             }
             prepared.push((root_signature, pipeline_state, expected_bindings));
         }
@@ -1841,6 +1933,38 @@ impl D3d12Renderer {
                         StrideInBytes: binding.stride,
                     };
                     list.IASetVertexBuffers(binding.slot, Some(&[view]));
+                }
+                if let Some(indirect) = draw.indirect {
+                    let index = draw.index_buffer.expect("indirect draws are indexed");
+                    let index_slot =
+                        self.validate_resource(index.buffer).expect("validated index buffer");
+                    let index_view = D3D12_INDEX_BUFFER_VIEW {
+                        BufferLocation: index_slot
+                            .resource
+                            .as_ref()
+                            .expect("validated resource")
+                            .GetGPUVirtualAddress()
+                            + index.offset,
+                        SizeInBytes: index.size,
+                        Format: match index.format {
+                            IndexFormat::Uint16 => DXGI_FORMAT_R16_UINT,
+                            IndexFormat::Uint32 => DXGI_FORMAT_R32_UINT,
+                        },
+                    };
+                    list.IASetIndexBuffer(Some(&raw const index_view));
+                    let arguments = self
+                        .validate_resource(indirect.resource)
+                        .expect("validated indirect arguments");
+                    let arguments = arguments.resource.as_ref().expect("validated resource");
+                    list.ExecuteIndirect(
+                        &self.indexed_draw_command_signature,
+                        indirect.maximum_commands,
+                        arguments,
+                        indirect.offset,
+                        None::<&ID3D12Resource>,
+                        0,
+                    );
+                    continue;
                 }
                 match (draw.call, draw.index_buffer) {
                     (
@@ -3419,6 +3543,30 @@ impl D3d12Renderer {
                 CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0)).map_err(backend_error)?;
             let (adapter, device) = create_device(&factory)?;
             let adapter: IDXGIAdapter3 = adapter.cast().map_err(backend_error)?;
+            let indirect_arguments = [D3D12_INDIRECT_ARGUMENT_DESC {
+                Type: D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED,
+                ..Default::default()
+            }];
+            let indirect_desc = D3D12_COMMAND_SIGNATURE_DESC {
+                ByteStride: 20,
+                NumArgumentDescs: 1,
+                pArgumentDescs: indirect_arguments.as_ptr(),
+                NodeMask: 0,
+            };
+            let mut indexed_draw_command_signature = None;
+            device
+                .CreateCommandSignature::<_, ID3D12CommandSignature>(
+                    &raw const indirect_desc,
+                    None,
+                    &raw mut indexed_draw_command_signature,
+                )
+                .map_err(backend_error)?;
+            let indexed_draw_command_signature =
+                indexed_draw_command_signature.ok_or_else(|| {
+                    RenderError::Backend(
+                        "D3D12 returned an empty indexed-draw command signature".into(),
+                    )
+                })?;
             let queue_desc = D3D12_COMMAND_QUEUE_DESC {
                 Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
                 ..Default::default()
@@ -3499,6 +3647,7 @@ impl D3d12Renderer {
                 dsv_increment,
                 pipelines: HashMap::new(),
                 compute_pipelines: HashMap::new(),
+                indexed_draw_command_signature,
                 graph_submission_active: false,
                 inflight_pass_lists: Vec::new(),
                 record_only: false,
@@ -4144,9 +4293,9 @@ fn uav_barrier(resource: &ID3D12Resource) -> D3D12_RESOURCE_BARRIER {
 fn graph_resource_state(usage: ResourceUsage) -> D3D12_RESOURCE_STATES {
     use windows::Win32::Graphics::Direct3D12::{
         D3D12_RESOURCE_STATE_DEPTH_WRITE, D3D12_RESOURCE_STATE_INDEX_BUFFER,
-        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-        D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-        D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
+        D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
     };
     match usage {
         ResourceUsage::SampledRead => {
@@ -4165,6 +4314,7 @@ fn graph_resource_state(usage: ResourceUsage) -> D3D12_RESOURCE_STATES {
             D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER
         }
         ResourceUsage::IndexBufferRead => D3D12_RESOURCE_STATE_INDEX_BUFFER,
+        ResourceUsage::IndirectArgumentRead => D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT,
     }
 }
 
@@ -4192,6 +4342,9 @@ fn validate_graph_usage(
         }
         ResourceUsage::ConstantBufferRead => {
             slot.buffer_usage.is_some_and(|usage| usage.contains(BufferUsage::CONSTANT))
+        }
+        ResourceUsage::IndirectArgumentRead => {
+            slot.buffer_usage.is_some_and(|usage| usage.contains(BufferUsage::INDIRECT_ARGUMENT))
         }
         ResourceUsage::CopySource | ResourceUsage::CopyDestination => true,
     };

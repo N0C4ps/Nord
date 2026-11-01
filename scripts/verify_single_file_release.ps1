@@ -47,12 +47,14 @@ $oldDxcPath = [Environment]::GetEnvironmentVariable('NORD_DXC_PATH', 'Process')
 $oldConfigFile = [Environment]::GetEnvironmentVariable('NORD_CONFIG_FILE', 'Process')
 $oldLocalAppData = [Environment]::GetEnvironmentVariable('LOCALAPPDATA', 'Process')
 $oldRustLog = [Environment]::GetEnvironmentVariable('RUST_LOG', 'Process')
+$oldGpuDrivenValidate = [Environment]::GetEnvironmentVariable('NORD_GPU_DRIVEN_VALIDATE', 'Process')
 $process = $null
 try {
     $env:NORD_DXC_PATH = 'Z:\missing\dxc.exe'
     Remove-Item Env:NORD_CONFIG_FILE -ErrorAction SilentlyContinue
     $env:LOCALAPPDATA = Join-Path $resolvedCheckDirectory 'appdata'
     $env:RUST_LOG = 'info'
+    $env:NORD_GPU_DRIVEN_VALIDATE = '1'
     $process = Start-Process -FilePath $isolatedExe `
         -WorkingDirectory $resolvedCheckDirectory `
         -WindowStyle Minimized `
@@ -91,6 +93,24 @@ try {
         throw "The game stayed open, but did not write the CPU visibility/instancing measurement to $logDirectory."
     }
     Write-Host "CPU visibility/instancing measurement: $metrics"
+
+    $gpuDrivenLog = if ($null -ne $latestLog) {
+        Get-Content -LiteralPath $latestLog.FullName |
+            Where-Object { $_ -match 'gpu_driven_culling_validated' } |
+            Select-Object -Last 1
+    } else {
+        $null
+    }
+    if (-not $gpuDrivenLog) {
+        throw 'The game stayed open, but did not validate GPU-generated indirect draw arguments.'
+    }
+    $gpuDrivenEvent = $gpuDrivenLog | ConvertFrom-Json
+    if ([uint32]$gpuDrivenEvent.fields.visible_instances -eq 0 -or
+        [uint32]$gpuDrivenEvent.fields.visible_instances -gt [uint32]$gpuDrivenEvent.fields.input_instances -or
+        [uint32]$gpuDrivenEvent.fields.indirect_draw_commands -ne 1) {
+        throw "GPU-driven culling returned invalid instance or command counts: $gpuDrivenLog"
+    }
+    Write-Host "GPU-generated culling and indirect draw readback: $gpuDrivenLog"
 
     $shadowPass = if ($null -ne $latestLog) {
         Get-Content -LiteralPath $latestLog.FullName |
@@ -150,5 +170,10 @@ try {
         Remove-Item Env:RUST_LOG -ErrorAction SilentlyContinue
     } else {
         $env:RUST_LOG = $oldRustLog
+    }
+    if ($null -eq $oldGpuDrivenValidate) {
+        Remove-Item Env:NORD_GPU_DRIVEN_VALIDATE -ErrorAction SilentlyContinue
+    } else {
+        $env:NORD_GPU_DRIVEN_VALIDATE = $oldGpuDrivenValidate
     }
 }

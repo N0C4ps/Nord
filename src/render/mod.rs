@@ -1,10 +1,12 @@
+mod gpu_driven;
 mod material;
 mod shadows;
 mod visibility;
 
+use self::gpu_driven::GpuDrivenCulling;
 use self::material::{PbrMaterial, PbrMaterialDesc};
 use self::shadows::DirectionalShadowMap;
-use self::visibility::{DrawRange, GameScene};
+use self::visibility::{CullingMetrics, DrawRange, GameScene};
 use crate::camera::GameCameraController;
 use nord_app::{
     ApplicationBufferDesc, ApplicationBufferMemory, ApplicationBufferUsage, ApplicationClearColor,
@@ -48,8 +50,9 @@ pub(super) struct GameRenderer {
     instance_buffer: nord_app::ApplicationGpuResourceHandle,
     instance_buffer_size: u32,
     scene: GameScene,
-    visible_mask: Vec<u8>,
-    draw_ranges: Vec<DrawRange>,
+    gpu_culling: GpuDrivenCulling,
+    cpu_culling_baseline: CullingMetrics,
+    gpu_validation_pending: bool,
     camera_buffer: nord_app::ApplicationGpuResourceHandle,
     camera_binding: ApplicationPipelineDescriptorBinding,
     camera: GameCameraController,
@@ -84,6 +87,7 @@ struct MeshGpuResources {
 }
 
 impl GameRenderer {
+    #[allow(clippy::too_many_lines)]
     pub(super) fn initialize(
         platform: &ApplicationPlatform,
         window: ApplicationWindowHandle,
@@ -110,6 +114,20 @@ impl GameRenderer {
         let scene = GameScene::demo_grid(mesh.validated_mesh.bounds(), model);
         let (instance_buffer, instance_buffer_size) =
             Self::upload_instances(&mut renderer, &scene)?;
+        let gpu_culling = GpuDrivenCulling::create(
+            &mut renderer,
+            instance_buffer,
+            instance_buffer_size,
+            u32::try_from(scene.instance_count())
+                .map_err(ApplicationDiagnosticError::msg)
+                .context("validating the scene instance count for GPU culling")?,
+            mesh_gpu.index_count,
+            scene.conservative_instance_radius().ok_or_else(|| {
+                ApplicationDiagnosticError::msg(
+                    "scene instance bounds cannot form a culling sphere",
+                )
+            })?,
+        )?;
         let (camera_buffer, camera_binding) = Self::create_camera_buffer(&mut renderer)?;
         let surface = Self::create_surface(&mut renderer, width, height)?;
         let mut visible_mask = Vec::with_capacity(scene.instance_count());
@@ -159,6 +177,15 @@ impl GameRenderer {
             grouping_ns = initial_metrics.grouping_ns,
             "CPU frustum culling and mesh/material batching measured for the initial camera"
         );
+        nord_app::info!(
+            name: "gpu_driven_path_initialized",
+            target: "nord::render",
+            input_instances = initial_metrics.total_instances,
+            cpu_visible_baseline = initial_metrics.visible_instances,
+            cpu_culling_ns = initial_metrics.culling_ns,
+            indirect_draw_commands = 1,
+            "GPU frustum compaction and indexed-indirect rendering are configured for the camera pass"
+        );
         Ok(Self {
             renderer: Some(renderer),
             surface,
@@ -170,8 +197,9 @@ impl GameRenderer {
             instance_buffer,
             instance_buffer_size,
             scene,
-            visible_mask,
-            draw_ranges,
+            gpu_culling,
+            cpu_culling_baseline: initial_metrics,
+            gpu_validation_pending: std::env::var_os("NORD_GPU_DRIVEN_VALIDATE").is_some(),
             camera_buffer,
             camera_binding,
             camera,
@@ -243,7 +271,9 @@ impl GameRenderer {
         let buffer = renderer
             .create_buffer(ApplicationBufferDesc::new(
                 u64::from(buffer_size),
-                ApplicationBufferUsage::COPY_DESTINATION.union(ApplicationBufferUsage::VERTEX),
+                ApplicationBufferUsage::COPY_DESTINATION
+                    .union(ApplicationBufferUsage::VERTEX)
+                    .union(ApplicationBufferUsage::STORAGE),
             )?)
             .map_err(ApplicationDiagnosticError::msg)
             .context("allocating the game's static instance-data buffer")?;
@@ -317,11 +347,8 @@ impl GameRenderer {
             .view_projection_matrix()
             .map_err(ApplicationDiagnosticError::msg)
             .context("building the game's view-projection matrix")?;
-        let _frame_visibility_metrics = self.scene.update_visibility(
-            view_projection,
-            &mut self.visible_mask,
-            &mut self.draw_ranges,
-        );
+        let frustum_planes = visibility::extract_frustum_planes(view_projection)
+            .ok_or_else(|| ApplicationDiagnosticError::msg("camera frustum planes are invalid"))?;
         let light_view_projection =
             shadows::directional_light_view_projection().ok_or_else(|| {
                 ApplicationDiagnosticError::msg("directional light projection is invalid")
@@ -331,7 +358,6 @@ impl GameRenderer {
             &mut self.shadow_visibility_mask,
             &mut self.shadow_draw_ranges,
         );
-        let draw_ranges = self.draw_ranges.clone();
         let shadow_draw_ranges = self.shadow_draw_ranges.clone();
         let normal_model =
             self.model.inverse().map(Mat4::transpose).ok_or_else(|| {
@@ -352,13 +378,13 @@ impl GameRenderer {
             .write_buffer(camera_buffer, 0, &constants)
             .map_err(ApplicationDiagnosticError::msg)
             .context("updating the game's per-frame camera and model matrices")?;
-        self.submit_pbr_mesh_pass(draw_ranges, shadow_draw_ranges)
+        self.gpu_culling.update_constants(renderer, frustum_planes)?;
+        self.submit_pbr_mesh_pass(shadow_draw_ranges)
     }
 
     #[allow(clippy::too_many_lines)] // One render-graph pass owns its declarations, encoding and submission.
     fn submit_pbr_mesh_pass(
         &mut self,
-        draw_ranges: Vec<DrawRange>,
         shadow_draw_ranges: Vec<DrawRange>,
     ) -> nord_app::ApplicationResult<()> {
         let renderer = self
@@ -372,6 +398,10 @@ impl GameRenderer {
         let index_buffer_size = self.index_buffer_size;
         let instance_buffer = self.instance_buffer;
         let instance_buffer_size = self.instance_buffer_size;
+        let visible_instances = self.gpu_culling.visible_instances();
+        let visible_instances_size = self.gpu_culling.visible_instances_size();
+        let indirect_arguments = self.gpu_culling.arguments();
+        let maximum_instances = self.gpu_culling.maximum_instances();
         let camera_buffer = self.camera_buffer;
         let camera_binding = self.camera_binding;
         let material_constants = self.material.constants_resource();
@@ -390,6 +420,7 @@ impl GameRenderer {
         let viewport_height = exact_surface_extent(surface.height)?;
         let shadow_extent = exact_surface_extent(DirectionalShadowMap::resolution())?;
         let mut queue = ApplicationRenderQueue::new();
+        self.gpu_culling.enqueue_compute_passes(&mut queue)?;
         queue
             .enqueue(
                 nord_app::ApplicationRenderPassDesc::new("Nord directional shadow depth")
@@ -461,7 +492,11 @@ impl GameRenderer {
                     .use_resource(surface.depth, ApplicationResourceUsage::DepthAttachmentWrite)
                     .use_resource(vertex_buffer, ApplicationResourceUsage::VertexBufferRead)
                     .use_resource(index_buffer, ApplicationResourceUsage::IndexBufferRead)
-                    .use_resource(instance_buffer, ApplicationResourceUsage::VertexBufferRead)
+                    .use_resource(visible_instances, ApplicationResourceUsage::VertexBufferRead)
+                    .use_resource(
+                        indirect_arguments,
+                        ApplicationResourceUsage::IndirectArgumentRead,
+                    )
                     .use_resource(camera_buffer, ApplicationResourceUsage::ConstantBufferRead)
                     .use_resource(material_constants, ApplicationResourceUsage::ConstantBufferRead)
                     .use_resource(material_textures[0], ApplicationResourceUsage::SampledRead)
@@ -480,53 +515,47 @@ impl GameRenderer {
                         Some(ApplicationViewport::new(0.0, 0.0, viewport_width, viewport_height)),
                         None,
                     )?;
-                    for range in draw_ranges {
-                        debug_assert_eq!(range.key.mesh_id, 0);
-                        debug_assert_eq!(range.key.material_id, 0);
-                        encoder.draw(
-                            &pipeline,
-                            &vertex_shader,
-                            &pixel_shader,
-                            &[
-                                camera_binding,
-                                material_bindings[0],
-                                material_bindings[1],
-                                material_bindings[2],
-                                material_bindings[3],
-                                material_bindings[4],
-                                shadow_binding,
-                            ],
-                            &[
-                                ApplicationVertexBufferBinding {
-                                    slot: 0,
-                                    buffer: vertex_buffer,
-                                    offset: 0,
-                                    size: vertex_buffer_size,
-                                    stride: VERTEX_STRIDE,
-                                },
-                                ApplicationVertexBufferBinding {
-                                    slot: 1,
-                                    buffer: instance_buffer,
-                                    offset: 0,
-                                    size: instance_buffer_size,
-                                    stride: INSTANCE_STRIDE,
-                                },
-                            ],
-                            Some(nord_app::ApplicationIndexBufferBinding {
-                                buffer: index_buffer,
+                    encoder.draw_indexed_indirect(
+                        &pipeline,
+                        &vertex_shader,
+                        &pixel_shader,
+                        &[
+                            camera_binding,
+                            material_bindings[0],
+                            material_bindings[1],
+                            material_bindings[2],
+                            material_bindings[3],
+                            material_bindings[4],
+                            shadow_binding,
+                        ],
+                        &[
+                            ApplicationVertexBufferBinding {
+                                slot: 0,
+                                buffer: vertex_buffer,
                                 offset: 0,
-                                size: index_buffer_size,
-                                format: nord_app::ApplicationIndexFormat::Uint16,
-                            }),
-                            nord_app::ApplicationDrawCall::Indexed {
-                                index_count,
-                                instance_count: range.instance_count,
-                                first_index: 0,
-                                base_vertex: 0,
-                                first_instance: range.first_instance,
+                                size: vertex_buffer_size,
+                                stride: VERTEX_STRIDE,
                             },
-                        )?;
-                    }
+                            ApplicationVertexBufferBinding {
+                                slot: 1,
+                                buffer: visible_instances,
+                                offset: 0,
+                                size: visible_instances_size,
+                                stride: INSTANCE_STRIDE,
+                            },
+                        ],
+                        nord_app::ApplicationIndexBufferBinding {
+                            buffer: index_buffer,
+                            offset: 0,
+                            size: index_buffer_size,
+                            format: nord_app::ApplicationIndexFormat::Uint16,
+                        },
+                        indirect_arguments,
+                        0,
+                        1,
+                        maximum_instances,
+                        index_count,
+                    )?;
                     encoder.end_graphics_pass()?;
                     Ok(())
                 },
@@ -537,6 +566,24 @@ impl GameRenderer {
             .submit_render_queue(&mut queue)
             .map_err(|error| ApplicationDiagnosticError::msg(format!("{error:?}")))
             .context("submitting the game's PBR mesh render graph")?;
+        if self.gpu_validation_pending {
+            let visible_instances = self.gpu_culling.validate_gpu_output(renderer)?;
+            nord_app::info!(
+                name: "gpu_driven_culling_validated",
+                target: "nord::render",
+                input_instances = self.cpu_culling_baseline.total_instances,
+                visible_instances,
+                culled_instances = self
+                    .cpu_culling_baseline
+                    .total_instances
+                    .saturating_sub(visible_instances),
+                cpu_visible_baseline = self.cpu_culling_baseline.visible_instances,
+                cpu_culling_ns = self.cpu_culling_baseline.culling_ns,
+                indirect_draw_commands = 1,
+                "GPU-generated draw arguments and compacted instance count passed readback validation"
+            );
+            self.gpu_validation_pending = false;
+        }
         if !self.shadow_pass_reported {
             nord_app::info!(
                 name: "directional_shadow_pass_submitted",
@@ -621,6 +668,7 @@ impl GameRenderer {
             .context("waiting for graphics work before game renderer shutdown")?;
         self.material.shutdown(&mut renderer)?;
         self.shadows.shutdown(&mut renderer)?;
+        self.gpu_culling.destroy(&mut renderer)?;
         for resource in [
             self.surface.color,
             self.surface.depth,

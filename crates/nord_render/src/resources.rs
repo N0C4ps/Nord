@@ -46,6 +46,8 @@ impl BufferUsage {
     pub const INDEX: Self = Self(1 << 3);
     pub const CONSTANT: Self = Self(1 << 4);
     pub const STORAGE: Self = Self(1 << 5);
+    /// Resource may be consumed by a command signature through `ExecuteIndirect`.
+    pub const INDIRECT_ARGUMENT: Self = Self(1 << 6);
     #[must_use]
     pub const fn empty() -> Self {
         Self(0)

@@ -5,11 +5,13 @@ use std::process::Command;
 
 const SHADER_SOURCE: &str = "assets/shaders/nord_pbr_forward.hlsl";
 const SHADOW_SHADER_SOURCE: &str = "assets/shaders/nord_directional_shadow.hlsl";
+const GPU_CULL_SHADER_SOURCE: &str = "assets/shaders/nord_gpu_culling.hlsl";
 
 fn main() {
     println!("cargo:rerun-if-changed=nord.exe.manifest");
     println!("cargo:rerun-if-changed={SHADER_SOURCE}");
     println!("cargo:rerun-if-changed={SHADOW_SHADER_SOURCE}");
+    println!("cargo:rerun-if-changed={GPU_CULL_SHADER_SOURCE}");
     for variable in ["NORD_DXC_PATH", "DXC_PATH", "ProgramFiles(x86)"] {
         println!("cargo:rerun-if-env-changed={variable}");
     }
@@ -92,6 +94,18 @@ fn compile_game_shaders() {
             stage: "ps",
         },
     );
+    let culling_shader = manifest_dir.join(GPU_CULL_SHADER_SOURCE);
+    for (entry, artifact_name) in
+        [("CSInitialize", "nord_gpu_culling_init"), ("CSCull", "nord_gpu_culling_cull")]
+    {
+        compile_stage(
+            &dxc,
+            &culling_shader,
+            shader_directory,
+            &output_directory,
+            ShaderStageSpec { artifact_name, entry, profile: "cs_6_0", stage: "cs" },
+        );
+    }
 }
 
 #[derive(Clone, Copy)]
