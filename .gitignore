@@ -7,5 +7,6 @@
 *.swo
 *.rs.bk
 *.log
+/_temp_docs
 .DS_Store
 Thumbs.db

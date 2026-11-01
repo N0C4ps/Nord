@@ -4,9 +4,15 @@ mod physics;
 mod render;
 mod world;
 
-fn main() {
+use std::process::ExitCode;
+
+fn main() -> ExitCode {
     if let Err(error) = app::run() {
-        eprintln!("Nord failed to start: {error}");
-        std::process::exit(1);
+        if !error.was_logged() {
+            eprintln!("Nord could not initialize: {error:#}");
+        }
+        return ExitCode::FAILURE;
     }
+
+    ExitCode::SUCCESS
 }

@@ -4,5 +4,30 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 
+[dependencies]
+crossbeam-channel = "0.5.15"
+opentelemetry = { version = "0.33.1", features = ["logs", "trace"] }
+opentelemetry-appender-tracing = "0.33.1"
+opentelemetry-otlp = { version = "0.33.1", default-features = false, features = [
+    "http-proto",
+    "logs",
+    "trace",
+    "reqwest-blocking-client",
+] }
+opentelemetry_sdk = { version = "0.33.1", features = ["logs", "trace"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+smallvec = { version = "1.15.1", features = ["serde"] }
+tracing = { version = "0.1.43", features = ["attributes"] }
+tracing-appender = "0.2.5"
+tracing-opentelemetry = "0.34.0"
+tracing-subscriber = { version = "0.3.23", default-features = false, features = [
+    "env-filter",
+    "fmt",
+    "json",
+    "registry",
+    "tracing-log",
+] }
+
 [lints]
 workspace = true

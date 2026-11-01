@@ -1,0 +1,11 @@
+[package]
+name = "nord_diagnostics"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = "1.0"
+
+[lints]
+workspace = true

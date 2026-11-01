@@ -1,15 +1,113 @@
 //! Application lifecycle infrastructure for Nord Tech consumers.
 
+mod config;
+mod crash;
+mod events;
+mod hash;
+mod inputs;
+mod jobs;
+mod logging;
+mod math;
+mod memory;
 mod platform;
+mod render;
+mod scheduler;
+mod threading;
+mod time;
+
+pub use config::{
+    ApplicationConfigError, ApplicationConfigFileFormat, ApplicationConfigLoader,
+    ApplicationConfigParseError, ApplicationConfigValidator,
+};
+pub use crash::{
+    ApplicationCrashReporter, ApplicationCrashReporterConfig, ApplicationCrashReporterDiagnostics,
+    ApplicationCrashReporterInitError,
+};
+pub use events::{
+    ApplicationDispatchReport, ApplicationEvent, ApplicationEventSubscription,
+    ApplicationEventSystem, ApplicationLifecycleEvent, ApplicationWindowEvent,
+    ApplicationWindowHandle,
+};
+pub use hash::{
+    ApplicationContentHash, ApplicationContentHasher, ApplicationHashBuilder,
+    ApplicationHashFileError, ApplicationParseContentHashError, application_hash_bytes,
+    application_hash_bytes_with_domain, application_hash_file, application_hash_reader,
+};
+pub use inputs::{
+    ApplicationInputEvent, ApplicationInputSubscription, ApplicationInputSystem,
+    ApplicationKeyCode, ApplicationModifiers, ApplicationPointerButton,
+};
+pub use jobs::ApplicationJobSystem;
+pub use logging::{
+    ApplicationInstrument, ApplicationJsonFileConfig, ApplicationLogDiagnostics,
+    ApplicationLogFileRotation, ApplicationLogFlushError, ApplicationLogQueueFullPolicy,
+    ApplicationLogger, ApplicationLoggerConfig, ApplicationLoggerInitError,
+    ApplicationOpenTelemetryConfig, ApplicationTerminalOutput,
+};
+pub use math::*;
+pub use memory::{
+    ApplicationArenaAllocationError, ApplicationMemoryBudgetError, ApplicationMemoryBudgetSnapshot,
+    ApplicationMemoryManager, ApplicationMemoryReservation, ApplicationObjectPool,
+    ApplicationPoolHandle, ApplicationPoolInsertError, ApplicationScratchArena,
+};
+pub use nord_diagnostics::{
+    Context as ApplicationErrorContext, Error as ApplicationDiagnosticError,
+    Result as ApplicationResult, anyhow, bail, ensure, ensure_eq, ensure_ne,
+};
+pub use nord_diagnostics::{debug_invariant, invariant};
+pub use nord_log::{Level, debug, error, event, info, info_span, instrument, span, trace, warn};
 
 pub use platform::{
-    ApplicationEventEmitter, ApplicationEventError, ApplicationFileAccess,
+    ApplicationDisplayError, ApplicationDisplayManager, ApplicationDisplayMonitor,
+    ApplicationDisplayRect, ApplicationEventEmitter, ApplicationEventError, ApplicationFileAccess,
     ApplicationFileDisposition, ApplicationFileHandle, ApplicationFileOpenOptions,
-    ApplicationFileSystem, ApplicationInputEvent, ApplicationKeyCode, ApplicationLifecycleEvent,
-    ApplicationModifiers, ApplicationPlatform, ApplicationPlatformBackend,
+    ApplicationFileSystem, ApplicationPlatform, ApplicationPlatformBackend,
     ApplicationPlatformError, ApplicationPlatformEvent, ApplicationPlatformEventKind,
-    ApplicationPointerButton, ApplicationTimestamp, ApplicationWindowEvent,
-    ApplicationWindowHandle,
+    ApplicationTimestamp, ApplicationWindowConfig, ApplicationWindowError,
+};
+pub use render::{
+    ApplicationBufferDesc, ApplicationBufferMemory, ApplicationBufferUsage, ApplicationClearColor,
+    ApplicationColorAttachmentBinding, ApplicationCompiledRenderGraph, ApplicationCompiledShader,
+    ApplicationComputePipelineDesc, ApplicationCullMode, ApplicationDeferredGpuAllocator,
+    ApplicationDescriptorHandle, ApplicationDescriptorKind, ApplicationDrawCall,
+    ApplicationFrontFace, ApplicationGpuAllocation, ApplicationGpuAllocationClass,
+    ApplicationGpuAllocatorStats, ApplicationGpuMemoryBudget, ApplicationGpuMemorySegment,
+    ApplicationGpuResourceHandle, ApplicationGpuResourceKind, ApplicationGraphResourceRef,
+    ApplicationGraphicsPipelineDesc, ApplicationIndexBufferBinding, ApplicationIndexFormat,
+    ApplicationPipelineCacheEntry, ApplicationPipelineDescriptorBinding,
+    ApplicationPipelineDescriptorTableBinding, ApplicationPolygonFillMode,
+    ApplicationPrimitiveTopology, ApplicationRenderBackend, ApplicationRenderBarrier,
+    ApplicationRenderBarrierKind, ApplicationRenderCommandEncoder,
+    ApplicationRenderCommandEncodingError, ApplicationRenderConfig, ApplicationRenderError,
+    ApplicationRenderPassDesc, ApplicationRenderPassId, ApplicationRenderQueue,
+    ApplicationRenderQueueError, ApplicationRenderTargetDesc, ApplicationRenderTargetResources,
+    ApplicationRenderer, ApplicationResourceAccess, ApplicationResourceDescriptionError,
+    ApplicationResourceUsage, ApplicationSamplerAddressMode, ApplicationSamplerDesc,
+    ApplicationSamplerDescriptionError, ApplicationSamplerFilter, ApplicationScissorRect,
+    ApplicationShaderBindingKind, ApplicationShaderCompileError, ApplicationShaderCompileOptions,
+    ApplicationShaderCompiler, ApplicationShaderDiagnostic, ApplicationShaderId,
+    ApplicationShaderReflection, ApplicationShaderResourceBinding, ApplicationShaderStage,
+    ApplicationTextureDesc, ApplicationTextureFormat, ApplicationTextureUsage,
+    ApplicationTransientAliasGroup, ApplicationTransientTextureId,
+    ApplicationTransientTextureLifetime, ApplicationVertexAttribute,
+    ApplicationVertexBufferBinding, ApplicationVertexFormat, ApplicationViewport,
+};
+pub use scheduler::{
+    ApplicationCancellationToken, ApplicationSchedulerBuildError, ApplicationSchedulerConfig,
+    ApplicationSchedulerShutdownError, ApplicationSchedulerSnapshot,
+    ApplicationSchedulerSubmitError, ApplicationShutdownMode, ApplicationTaskContext,
+    ApplicationTaskExecutionError, ApplicationTaskHandle, ApplicationTaskId,
+    ApplicationTaskPriority, ApplicationTaskScheduler,
+};
+pub use threading::{
+    ApplicationThreadPool, ApplicationThreadPoolBuildError, ApplicationThreadPoolConfig,
+};
+pub use time::{
+    ApplicationClockConfig, ApplicationFixedStepAccumulator, ApplicationFixedStepConfig,
+    ApplicationFixedStepConfigError, ApplicationFixedStepPlan, ApplicationFpsCounter,
+    ApplicationFpsSnapshot, ApplicationFpsWindowError, ApplicationFrameClock, ApplicationFrameTime,
+    ApplicationStopwatch, ApplicationTimeScaleError, ApplicationUnixTimestamp,
+    ApplicationUnixTimestampError,
 };
 
 use nord_dependency::{DependencyBuilder, DependencyContainer, DependencyError};
