@@ -4,6 +4,11 @@ cbuffer CameraData : register(b0)
     column_major float4x4 viewProjection;
 };
 
+cbuffer MaterialData : register(b1)
+{
+    float4 baseColor;
+};
+
 struct VertexInput
 {
     float3 position : POSITION;
@@ -29,6 +34,7 @@ float4 PSMain(VertexOutput input) : SV_Target0
 {
     const float3 lightDirection = normalize(float3(-0.45, 0.72, -0.52));
     const float diffuse = saturate(dot(normalize(input.worldNormal), lightDirection));
-    const float3 baseColor = float3(0.12, 0.66, 0.88);
-    return float4(baseColor * (0.22 + 0.78 * diffuse), 1.0);
+    const float ambient = 0.22;
+    const float3 forwardLitColor = baseColor.rgb * (ambient + (1.0 - ambient) * diffuse);
+    return float4(forwardLitColor, 1.0);
 }

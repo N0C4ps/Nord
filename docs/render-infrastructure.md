@@ -165,6 +165,9 @@ This uses the documented [D3D12 `CopyResource` constraints](https://learn.micros
 and [resource barrier rules](https://learn.microsoft.com/en-us/windows/win32/direct3d12/using-resource-barriers-to-synchronize-in-direct3d-12).
 The first 3D camera, indexed mesh, transforms, and depth-tested game pass are
 documented in [Renderer 3D — Stage 1](render-3d-stage-1.md).
+The game's basic opaque material contract and shader loading live in
+`src/render/material.rs`; `nord_render` supplies only compiler/reflection,
+resource, descriptor, pipeline, and command-encoding infrastructure.
 
 `nord_platform` exposes a hidden integration token for a live native window;
 `nord_app` passes it directly to `nord_render`. The token never reaches game
