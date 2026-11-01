@@ -27,6 +27,8 @@ struct VertexInput
     float3 normal : NORMAL;
     float4 tangent : TANGENT;
     float2 texCoord : TEXCOORD0;
+    float3 instanceTranslation : INSTANCE_TRANSLATION;
+    float3 instanceTint : INSTANCE_TINT;
 };
 
 struct VertexOutput
@@ -36,12 +38,14 @@ struct VertexOutput
     float3 worldNormal : TEXCOORD1;
     float4 worldTangent : TEXCOORD2;
     float2 texCoord : TEXCOORD3;
+    float3 instanceTint : TEXCOORD4;
 };
 
 VertexOutput VSMain(VertexInput input)
 {
     VertexOutput output;
-    const float4 worldPosition = mul(model, float4(input.position, 1.0));
+    float4 worldPosition = mul(model, float4(input.position, 1.0));
+    worldPosition.xyz += input.instanceTranslation;
     const float3 worldNormal = normalize(mul((float3x3)normalModel, input.normal));
     float3 worldTangent = mul((float3x3)model, input.tangent.xyz);
     worldTangent = normalize(worldTangent - worldNormal * dot(worldNormal, worldTangent));
@@ -51,6 +55,7 @@ VertexOutput VSMain(VertexInput input)
     output.worldNormal = worldNormal;
     output.worldTangent = float4(worldTangent, input.tangent.w);
     output.texCoord = input.texCoord;
+    output.instanceTint = input.instanceTint;
     return output;
 }
 
@@ -99,7 +104,7 @@ float4 PSMain(VertexOutput input) : SV_Target0
     // The sRGB view decodes color texels before filtering/sampling. The factor
     // is authored and multiplied in linear light, as required by glTF.
     const float4 baseSample = baseColorTexture.Sample(materialSampler, input.texCoord);
-    const float3 baseColor = max(baseSample.rgb * baseColorFactor.rgb, 0.0);
+    const float3 baseColor = max(baseSample.rgb * baseColorFactor.rgb * input.instanceTint, 0.0);
     const float4 metallicRoughness = metallicRoughnessTexture.Sample(materialSampler, input.texCoord);
     const float metallic = saturate(materialFactors.x * metallicRoughness.b);
     const float perceptualRoughness = clamp(

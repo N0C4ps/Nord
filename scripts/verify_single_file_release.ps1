@@ -45,10 +45,14 @@ if ($files.Count -ne 1 -or $files[0].Name -ne 'Nord.exe') {
 
 $oldDxcPath = [Environment]::GetEnvironmentVariable('NORD_DXC_PATH', 'Process')
 $oldConfigFile = [Environment]::GetEnvironmentVariable('NORD_CONFIG_FILE', 'Process')
+$oldLocalAppData = [Environment]::GetEnvironmentVariable('LOCALAPPDATA', 'Process')
+$oldRustLog = [Environment]::GetEnvironmentVariable('RUST_LOG', 'Process')
 $process = $null
 try {
     $env:NORD_DXC_PATH = 'Z:\missing\dxc.exe'
     Remove-Item Env:NORD_CONFIG_FILE -ErrorAction SilentlyContinue
+    $env:LOCALAPPDATA = Join-Path $resolvedCheckDirectory 'appdata'
+    $env:RUST_LOG = 'info'
     $process = Start-Process -FilePath $isolatedExe `
         -WorkingDirectory $resolvedCheckDirectory `
         -WindowStyle Minimized `
@@ -71,6 +75,22 @@ try {
     }
 
     Write-Host "PASS: Nord.exe stayed running for $StartupTimeoutSeconds seconds from a folder containing only the executable."
+    $logDirectory = Join-Path $env:LOCALAPPDATA 'nord\logs'
+    $latestLog = Get-ChildItem -LiteralPath $logDirectory -Filter 'nord.*.jsonl' `
+        -File -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    $metrics = if ($null -ne $latestLog) {
+        Get-Content -LiteralPath $latestLog.FullName |
+            Where-Object { $_ -match 'CPU frustum culling and mesh/material batching measured' } |
+            Select-Object -Last 1
+    } else {
+        $null
+    }
+    if (-not $metrics) {
+        throw "The game stayed open, but did not write the CPU visibility/instancing measurement to $logDirectory."
+    }
+    Write-Host "CPU visibility/instancing measurement: $metrics"
 } finally {
     if ($null -ne $process) {
         $process.Refresh()
@@ -92,5 +112,15 @@ try {
         Remove-Item Env:NORD_CONFIG_FILE -ErrorAction SilentlyContinue
     } else {
         $env:NORD_CONFIG_FILE = $oldConfigFile
+    }
+    if ($null -eq $oldLocalAppData) {
+        Remove-Item Env:LOCALAPPDATA -ErrorAction SilentlyContinue
+    } else {
+        $env:LOCALAPPDATA = $oldLocalAppData
+    }
+    if ($null -eq $oldRustLog) {
+        Remove-Item Env:RUST_LOG -ErrorAction SilentlyContinue
+    } else {
+        $env:RUST_LOG = $oldRustLog
     }
 }

@@ -2,10 +2,10 @@
 
 use nord_app::{
     ApplicationDiagnosticError, ApplicationErrorContext, ApplicationInputEvent, ApplicationKeyCode,
-    ApplicationPointerButton, ApplicationWindowHandle,
+    ApplicationPointerButton, ApplicationVec3 as Vec3, ApplicationWindowHandle,
+    application_wrap_angle_pi as wrap_angle_pi,
 };
 use nord_camera::PerspectiveCamera;
-use nord_math::{Vec3, wrap_angle_pi};
 
 const MOUSE_SENSITIVITY_RADIANS_PER_PIXEL: f32 = 0.003;
 const MAX_PITCH_RADIANS: f32 = 1.553_343;
@@ -151,10 +151,9 @@ mod tests {
     use super::{GameCameraController, GameCursorAction, mouse_angle_delta};
     use nord_app::{
         ApplicationInputEvent, ApplicationKeyCode, ApplicationModifiers, ApplicationPlatform,
-        ApplicationPointerButton,
+        ApplicationPointerButton, ApplicationVec3 as Vec3,
     };
     use nord_camera::PerspectiveCamera;
-    use nord_math::Vec3;
 
     fn test_camera() -> PerspectiveCamera {
         let mut camera = PerspectiveCamera::new(1.0, 16.0 / 9.0, 0.1, 100.0).unwrap();
