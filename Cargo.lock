@@ -849,7 +849,6 @@ dependencies = [
  "ctrlc",
  "nord_app",
  "nord_camera",
- "nord_math",
  "nord_mesh",
  "serde",
 ]

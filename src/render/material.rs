@@ -234,12 +234,38 @@ fn create_pbr_pipeline(
         .with_vertex_attribute(vertex_attribute("POSITION", ApplicationVertexFormat::Float3, 0))
         .with_vertex_attribute(vertex_attribute("NORMAL", ApplicationVertexFormat::Float3, 12))
         .with_vertex_attribute(vertex_attribute("TANGENT", ApplicationVertexFormat::Float4, 24))
-        .with_vertex_attribute(vertex_attribute("TEXCOORD", ApplicationVertexFormat::Float2, 40));
+        .with_vertex_attribute(vertex_attribute("TEXCOORD", ApplicationVertexFormat::Float2, 40))
+        .with_vertex_attribute(instance_vertex_attribute(
+            "INSTANCE_TRANSLATION",
+            ApplicationVertexFormat::Float3,
+            0,
+        ))
+        .with_vertex_attribute(instance_vertex_attribute(
+            "INSTANCE_TINT",
+            ApplicationVertexFormat::Float3,
+            12,
+        ));
     renderer
         .create_graphics_pipeline(&pipeline, vertex_shader, pixel_shader, 1)
         .map_err(ApplicationDiagnosticError::msg)
         .context("creating the game's opaque metallic-roughness pipeline")?;
     Ok(pipeline)
+}
+
+fn instance_vertex_attribute(
+    semantic: &str,
+    format: ApplicationVertexFormat,
+    byte_offset: u32,
+) -> ApplicationVertexAttribute {
+    ApplicationVertexAttribute {
+        semantic: semantic.into(),
+        semantic_index: 0,
+        format,
+        input_slot: 1,
+        byte_offset,
+        per_instance: true,
+        instance_step_rate: 1,
+    }
 }
 
 fn create_material_textures(

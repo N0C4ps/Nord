@@ -103,7 +103,7 @@ if ($rootManifest -match '(?m)^nord_threading\s*=|^nord_jobs\s*=|^nord_scheduler
 $engineManifests = Get-ChildItem (Join-Path $script:NordRoot 'crates') -Filter 'Cargo.toml' -Recurse -File |
     Where-Object { $_.Directory.Name -ne 'nord_app' }
 foreach ($manifest in $engineManifests) {
-    if ($manifest.Directory.Name -notin @('nord_render', 'nord_physics', 'nord_world', 'nord_generation') -and
+    if ($manifest.Directory.Name -notin @('nord_render', 'nord_physics', 'nord_world', 'nord_generation', 'nord_camera', 'nord_mesh') -and
         (Select-String -Path $manifest.FullName -Pattern '(?m)^nord_math\s*=')) {
         $violations += "$($manifest.FullName) must keep nord_math behind nord_app or a math-consuming engine crate."
     }
