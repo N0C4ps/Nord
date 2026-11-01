@@ -4,6 +4,9 @@ target-dir = "target"
 [resolver]
 incompatible-rust-versions = "fallback"
 
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
 [alias]
 lint = "clippy --workspace --all-targets --all-features -- -D warnings"
 check-all = "check --workspace --all-targets --all-features --locked"
