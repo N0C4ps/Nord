@@ -848,6 +848,9 @@ version = "0.1.0"
 dependencies = [
  "ctrlc",
  "nord_app",
+ "nord_camera",
+ "nord_math",
+ "nord_mesh",
  "serde",
 ]
 
@@ -872,6 +875,13 @@ dependencies = [
  "nord_threading",
  "nord_time",
  "raw-window-handle",
+]
+
+[[package]]
+name = "nord_camera"
+version = "0.1.0"
+dependencies = [
+ "nord_math",
 ]
 
 [[package]]
@@ -960,6 +970,13 @@ name = "nord_memory"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
+]
+
+[[package]]
+name = "nord_mesh"
+version = "0.1.0"
+dependencies = [
+ "nord_math",
 ]
 
 [[package]]

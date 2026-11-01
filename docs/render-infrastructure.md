@@ -163,6 +163,8 @@ pipeline configuration, and render-graph pass. The renderer remains generic;
 swapchain image, applying and restoring D3D12 resource states around the copy.
 This uses the documented [D3D12 `CopyResource` constraints](https://learn.microsoft.com/en-us/windows/desktop/api/d3d12/nf-d3d12-id3d12graphicscommandlist-copyresource)
 and [resource barrier rules](https://learn.microsoft.com/en-us/windows/win32/direct3d12/using-resource-barriers-to-synchronize-in-direct3d-12).
+The first 3D camera, indexed mesh, transforms, and depth-tested game pass are
+documented in [Renderer 3D — Stage 1](render-3d-stage-1.md).
 
 `nord_platform` exposes a hidden integration token for a live native window;
 `nord_app` passes it directly to `nord_render`. The token never reaches game
