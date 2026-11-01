@@ -11,7 +11,9 @@ use nord_app::{
     ApplicationVertexBufferBinding, ApplicationVertexFormat, ApplicationViewport,
 };
 
-const HIZ_LEVEL_COUNT: usize = 15;
+const HIZ_DESCRIPTOR_COUNT: usize = 15;
+const HIZ_REDUCTION_FACTOR: u32 = 4;
+const DEPTH_PREPASS_DOWNSAMPLE: u32 = 4;
 const THREADS_PER_GROUP: u32 = 8;
 
 pub(super) struct HiZOcclusion {
@@ -24,6 +26,7 @@ pub(super) struct HiZOcclusion {
     level_uavs: Vec<ApplicationDescriptorHandle>,
     width: u32,
     height: u32,
+    mip_count: u32,
     depth_pipeline: ApplicationGraphicsPipelineDesc,
     depth_vertex: ApplicationCompiledShader,
     depth_pixel: ApplicationCompiledShader,
@@ -38,10 +41,12 @@ impl HiZOcclusion {
         width: u32,
         height: u32,
     ) -> nord_app::ApplicationResult<Self> {
+        let depth_width = width.div_ceil(DEPTH_PREPASS_DOWNSAMPLE).max(1);
+        let depth_height = height.div_ceil(DEPTH_PREPASS_DOWNSAMPLE).max(1);
         let target = renderer
             .create_render_target(nord_app::ApplicationRenderTargetDesc::new(
-                width,
-                height,
+                depth_width,
+                depth_height,
                 Some(ApplicationTextureFormat::R32Float),
                 Some(ApplicationTextureFormat::D32Float),
             )?)
@@ -58,12 +63,12 @@ impl HiZOcclusion {
             .map_err(ApplicationDiagnosticError::msg)
             .context("creating the camera depth test attachment")?;
 
-        let mut levels = Vec::with_capacity(HIZ_LEVEL_COUNT);
-        let mut current_width = width;
-        let mut current_height = height;
-        for _ in 1..HIZ_LEVEL_COUNT {
-            current_width = current_width.div_ceil(2).max(1);
-            current_height = current_height.div_ceil(2).max(1);
+        let mut levels = Vec::new();
+        let mut current_width = depth_width;
+        let mut current_height = depth_height;
+        while current_width > 1 || current_height > 1 {
+            current_width = current_width.div_ceil(HIZ_REDUCTION_FACTOR).max(1);
+            current_height = current_height.div_ceil(HIZ_REDUCTION_FACTOR).max(1);
             levels.push(
                 renderer
                     .create_texture(ApplicationTextureDesc::new(
@@ -76,9 +81,12 @@ impl HiZOcclusion {
                     .context("allocating a conservative Hi-Z reduction level")?,
             );
         }
-        let mut resources = Vec::with_capacity(HIZ_LEVEL_COUNT);
+        let mut resources = Vec::with_capacity(HIZ_DESCRIPTOR_COUNT);
         resources.push(depth_color);
         resources.extend(levels.iter().copied());
+        while resources.len() < HIZ_DESCRIPTOR_COUNT {
+            resources.push(*resources.last().expect("depth target is always present"));
+        }
         let level_views = renderer
             .create_texture_srv_array(&resources)
             .map_err(ApplicationDiagnosticError::msg)
@@ -140,6 +148,8 @@ impl HiZOcclusion {
             .map_err(ApplicationDiagnosticError::msg)
             .context("creating the Hi-Z maximum-reduction pipeline")?;
 
+        let mip_count =
+            u32::try_from(levels.len() + 1).expect("Hi-Z texture table has at most 15 levels");
         Ok(Self {
             depth_color,
             depth_color_view,
@@ -148,8 +158,9 @@ impl HiZOcclusion {
             levels,
             level_views,
             level_uavs,
-            width,
-            height,
+            width: depth_width,
+            height: depth_height,
+            mip_count,
             depth_pipeline,
             depth_vertex,
             depth_pixel,
@@ -264,8 +275,8 @@ impl HiZOcclusion {
             self.levels.iter().zip(&self.level_uavs).enumerate()
         {
             let destination_view = self.level_views[index + 1];
-            let destination_width = source_width.div_ceil(2).max(1);
-            let destination_height = source_height.div_ceil(2).max(1);
+            let destination_width = source_width.div_ceil(HIZ_REDUCTION_FACTOR).max(1);
+            let destination_height = source_height.div_ceil(HIZ_REDUCTION_FACTOR).max(1);
             let pipeline = self.build_pipeline;
             let shader = self.build_shader.clone();
             let bindings = [
@@ -315,7 +326,7 @@ impl HiZOcclusion {
     }
 
     pub(super) fn hiz_resources(&self) -> Vec<ApplicationGpuResourceHandle> {
-        let mut resources = Vec::with_capacity(HIZ_LEVEL_COUNT);
+        let mut resources = Vec::with_capacity(self.levels.len() + 1);
         resources.push(self.depth_color);
         resources.extend(self.levels.iter().copied());
         resources
@@ -325,8 +336,8 @@ impl HiZOcclusion {
         &self.level_views
     }
 
-    pub(super) const fn mip_count() -> u32 {
-        15
+    pub(super) const fn mip_count(&self) -> u32 {
+        self.mip_count
     }
 
     pub(super) fn shutdown(

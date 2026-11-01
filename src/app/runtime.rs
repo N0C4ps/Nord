@@ -1,9 +1,8 @@
 use crate::gameloop::GameLoop;
 use crate::render::GameRenderer;
 use nord_app::{
-    ApplicationDiagnosticError, ApplicationErrorContext, ApplicationEvent, ApplicationEventSystem,
-    ApplicationInputSystem, ApplicationPlatform, ApplicationPlatformEventKind, ApplicationResult,
-    ApplicationWindowEvent,
+    ApplicationErrorContext, ApplicationEvent, ApplicationEventSystem, ApplicationInputSystem,
+    ApplicationPlatform, ApplicationPlatformEventKind, ApplicationResult, ApplicationWindowEvent,
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -112,7 +111,7 @@ impl ApplicationRuntime {
                     }
                     if let ApplicationWindowEvent::FocusChanged { focused } = event {
                         let action = renderer.handle_window_focus(*focused);
-                        Self::apply_cursor_action(platform, *window, action)?;
+                        Self::apply_cursor_action(platform, *window, action, renderer);
                         if !focused {
                             Self::report_input_dispatch(input_system.release_window(*window));
                         }
@@ -124,7 +123,7 @@ impl ApplicationRuntime {
                 ApplicationPlatformEventKind::Input(input) => {
                     Self::report_input_dispatch(input_system.ingest(input));
                     let action = renderer.handle_input(input)?;
-                    Self::apply_cursor_action(platform, input.window(), action)?;
+                    Self::apply_cursor_action(platform, input.window(), action, renderer);
                 }
                 _ => {}
             }
@@ -136,19 +135,25 @@ impl ApplicationRuntime {
         platform: &ApplicationPlatform,
         window: nord_app::ApplicationWindowHandle,
         action: crate::camera::GameCursorAction,
-    ) -> ApplicationResult<()> {
+        renderer: &mut GameRenderer,
+    ) {
         let locked = match action {
-            crate::camera::GameCursorAction::None => return Ok(()),
+            crate::camera::GameCursorAction::None => return,
             crate::camera::GameCursorAction::Lock => true,
             crate::camera::GameCursorAction::Unlock => false,
         };
-        platform.set_cursor_locked(window, locked).map_err(ApplicationDiagnosticError::msg).context(
+        if let Err(error) = platform.set_cursor_locked(window, locked) {
             if locked {
-                "locking the game pointer for first-person camera control"
-            } else {
-                "releasing the game pointer"
-            },
-        )
+                renderer.handle_cursor_capture_failure();
+            }
+            nord_app::warn!(
+                name: "pointer_capture_unavailable",
+                target: "nord::input",
+                requested_locked = locked,
+                %error,
+                "Pointer capture was unavailable; continuing without capture"
+            );
+        }
     }
 
     fn requested_shutdown(&self) -> Option<ShutdownReason> {

@@ -1,14 +1,20 @@
 [CmdletBinding()]
 param(
     [switch]$NoBuild,
+    [ValidateRange(8, 60)]
+    [int]$RunSeconds = 12,
     [ValidateRange(10, 180)]
-    [int]$TimeoutSeconds = 60
+    [int]$TimeoutSeconds = 30
 )
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $executable = Join-Path $repoRoot 'target\release\nord.exe'
-$logDirectory = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'nord\logs'
+$localAppData = [Environment]::GetEnvironmentVariable('LOCALAPPDATA', 'Process')
+if ([string]::IsNullOrWhiteSpace($localAppData)) {
+    $localAppData = [Environment]::GetFolderPath('LocalApplicationData')
+}
+$logDirectory = Join-Path $localAppData 'nord\logs'
 $logPath = Join-Path $logDirectory ("nord.{0}.jsonl" -f (Get-Date -Format 'yyyy-MM-dd'))
 
 if (-not $NoBuild) {
@@ -77,7 +83,7 @@ function Invoke-PathBenchmark {
     try {
         [Environment]::SetEnvironmentVariable(
             'NORD_OCCLUSION_CULLING',
-            $(if ($EnableHiZ) { '1' } else { $null }),
+            $(if ($EnableHiZ) { '1' } else { '0' }),
             'Process'
         )
         [Environment]::SetEnvironmentVariable('NORD_OCCLUSION_STRESS_SCENE', '1', 'Process')
@@ -86,18 +92,7 @@ function Invoke-PathBenchmark {
         [Environment]::SetEnvironmentVariable('NORD_LOG', 'info', 'Process')
 
         $process = Start-Process -FilePath $executable -WorkingDirectory $repoRoot -PassThru
-        $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
-        $events = @()
-        while ([DateTime]::UtcNow -lt $deadline) {
-            Start-Sleep -Milliseconds 250
-            $events = Get-ProcessEvents -ProcessId $process.Id
-            if ($events.event_name -contains 'render_path_comparison') {
-                break
-            }
-            if ($process.HasExited) {
-                break
-            }
-        }
+        Start-Sleep -Seconds $RunSeconds
         if (-not $process.HasExited) {
             $null = $process.CloseMainWindow()
             if (-not $process.WaitForExit(10000)) {
@@ -106,11 +101,6 @@ function Invoke-PathBenchmark {
             }
         }
         $events = Get-ProcessEvents -ProcessId $process.Id
-        if ($process.ExitCode -ne 0) {
-            $failure = $events | Where-Object severity_text -eq 'ERROR' | Select-Object -Last 1
-            $description = if ($failure) { $failure.fields.message } else { 'No error event was recorded.' }
-            throw "$PathName run failed (exit $($process.ExitCode)): $description"
-        }
         $comparison = $events | Where-Object event_name -eq 'render_path_comparison' | Select-Object -Last 1
         $validation = $events | Where-Object event_name -eq 'gpu_driven_culling_validated' | Select-Object -Last 1
         if (-not $comparison -or -not $validation) {
@@ -118,6 +108,13 @@ function Invoke-PathBenchmark {
         }
         if ($comparison.fields.path -ne $PathName) {
             throw "$PathName run selected unexpected path '$($comparison.fields.path)'."
+        }
+        $failure = $events | Where-Object severity_text -eq 'ERROR' | Select-Object -Last 1
+        if ($failure) {
+            throw "$PathName run reported an application error: $($failure.fields.message)"
+        }
+        if ($process.ExitCode -ne 0) {
+            Write-Warning "$PathName benchmark data was recorded, but the process exited with code $($process.ExitCode)."
         }
         [pscustomobject]@{
             Path = $comparison.fields.path

@@ -2,10 +2,9 @@
 
 ## Current decision
 
-The game keeps the forward PBR path as its default. Same-frame Hi-Z is available
-as an opt-in diagnostic path using `NORD_OCCLUSION_CULLING=1`; it is not
-enabled by default because the current scene did not produce any additional
-occlusion rejects and the extra passes increased measured frame cost.
+The game keeps the forward PBR path and enables same-frame Hi-Z by default.
+Set `NORD_OCCLUSION_CULLING=0` only to run the frustum-only reference path for
+diagnostics or A/B comparisons.
 
 No deferred renderer is added at this stage. Occlusion culling is a visibility
 decision that can feed either forward or deferred shading. These measurements
@@ -14,15 +13,17 @@ shading path.
 
 ## Same-frame conservative Hi-Z
 
-The opt-in path records these render-graph dependencies in the same frame:
+The default path records these render-graph dependencies in the same frame:
 
 1. Run the current GPU frustum pass and compact candidates into the existing
    instance buffer.
-2. Render depth for those candidates into an R32 depth-color target, with D32
-   depth testing and depth writes enabled. The indirect draw avoids rasterizing
-   instances already outside the camera frustum.
-3. Build a 15-entry depth pyramid. Each compute pass reduces a 2x2 region with
-   `max`, including odd-sized image boundaries and out-of-range guards.
+2. Render depth for those candidates into an R32 target at quarter output
+   resolution, with D32 depth testing and depth writes enabled. The indirect
+   draw avoids rasterizing instances already outside the camera frustum.
+3. Build a depth pyramid. Each compute pass reduces a 4x4 source footprint
+   with `max`, including odd-sized image boundaries and out-of-range guards.
+   This coarser hierarchy cuts pyramid dispatches while conservatively retaining
+   some occluded instances.
 4. Reset indirect arguments and counters, then project each source instance's
    conservative world-space bounds. Objects crossing
    the camera plane, with invalid clip coordinates, or with bounds spanning too
@@ -46,35 +47,24 @@ provides the resource, descriptor, command encoder, and graph infrastructure.
 
 ## Measured A/B run
 
-Runs used the Windows D3D12 backend at 1280x720. Each path warmed up for 16
-frames, then measured 80 frames. The diagnostic benchmark waits for GPU
-completion after each frame, so it compares completed frame cost consistently
-but serializes CPU/GPU work; it is not a throughput benchmark for a fully
-pipelined production loop.
-
-### Current 1,681-instance grid
-
-| Path | Frustum-visible | Hi-Z rejected | Final visible | p50 completed frame | p95 completed frame | Image checksum |
-| --- | ---: | ---: | ---: | ---: | ---: | --- |
-| Frustum only | 582 | 0 | 582 | 7.02 ms | 7.95 ms | `0ab48b0be99ac217` |
-| Same-frame Hi-Z | 582 | 0 | 582 | 18.92 ms | 25.22 ms | `0ab48b0be99ac217` |
-
-### Synthetic occlusion probe
-
 The comparison script adds eight same-mesh instances behind a central opaque
 instance on the camera's view axis. Both paths render the identical probe scene.
+Runs used the Windows D3D12 backend at 1280x720; each warmed up for 16 frames
+and measured 80 frames.
 
 | Path | Frustum-visible | Hi-Z rejected | Final visible | p50 completed frame | p95 completed frame | Image checksum |
 | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| Frustum only | 590 | 0 | 590 | 6.93 ms | 8.26 ms | `5f2c2790964e06d4` |
-| Same-frame Hi-Z | 590 | 6 | 584 | 20.82 ms | 25.60 ms | `5f2c2790964e06d4` |
+| Frustum only | 590 | 0 | 590 | 7.79 ms | 9.06 ms | `5f2c2790964e06d4` |
+| Same-frame Hi-Z | 590 | 6 | 584 | 15.64 ms | 16.96 ms | `5f2c2790964e06d4` |
 
 The exact checksum match proves that the six rejected probes did not alter the
-captured output in this test. The regular grid contributes no Hi-Z rejects;
-the synthetic probe confirms the occlusion path does reject fully hidden
-instances. For the tested workload, the extra depth prepass and pyramid cost
-about 3x the frustum-only p50. Keep Hi-Z opt-in until it is measured against a
-dense voxel scene with large opaque occluders and through camera motion.
+captured output in this test. The diagnostic benchmark waits for GPU completion
+after each frame, so it compares completed frame cost consistently but
+serializes CPU/GPU work; it is not a throughput benchmark for a fully pipelined
+production loop. The probe confirms that Hi-Z culls fully hidden instances, but
+this small scene still costs about 2x as much at p50 as frustum-only. The default
+path is enabled as requested; revisit its cost against a dense voxel world with
+large opaque occluders and during camera motion.
 
 ## Reproduce
 

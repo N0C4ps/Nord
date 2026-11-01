@@ -146,8 +146,7 @@ impl GameRenderer {
         )?;
         let (camera_buffer, camera_binding) = Self::create_camera_buffer(&mut renderer)?;
         let surface = Self::create_surface(&mut renderer, width, height)?;
-        let occlusion_enabled =
-            std::env::var("NORD_OCCLUSION_CULLING").is_ok_and(|value| value == "1");
+        let occlusion_enabled = occlusion_culling_enabled();
         let occlusion = if occlusion_enabled {
             Some(HiZOcclusion::create(&mut renderer, width, height)?)
         } else {
@@ -415,7 +414,7 @@ impl GameRenderer {
             renderer,
             frustum_planes,
             view_projection,
-            self.occlusion.as_ref().map_or(1, |_| HiZOcclusion::mip_count()),
+            self.occlusion.as_ref().map_or(1, HiZOcclusion::mip_count),
         )?;
         self.submit_pbr_mesh_pass(shadow_draw_ranges)
     }
@@ -480,6 +479,7 @@ impl GameRenderer {
                 &mut queue,
                 &occlusion.hiz_resources(),
                 occlusion.hiz_views(),
+                occlusion.mip_count(),
             )?;
         } else {
             self.gpu_culling.enqueue_compute_passes(&mut queue)?;
@@ -701,6 +701,10 @@ impl GameRenderer {
         self.camera.handle_window_focus(focused)
     }
 
+    pub(super) fn handle_cursor_capture_failure(&mut self) {
+        self.camera.handle_cursor_capture_failure();
+    }
+
     pub(super) fn resize(&mut self, width: u32, height: u32) -> nord_app::ApplicationResult<()> {
         let renderer = self
             .renderer
@@ -732,7 +736,7 @@ impl GameRenderer {
             .map_err(ApplicationDiagnosticError::msg)
             .context("resizing the Nord render surface")?;
         self.surface = Self::create_surface(renderer, width, height)?;
-        if std::env::var("NORD_OCCLUSION_CULLING").is_ok_and(|value| value == "1") {
+        if occlusion_culling_enabled() {
             self.occlusion = Some(HiZOcclusion::create(renderer, width, height)?);
         }
         self.camera
@@ -817,6 +821,11 @@ fn collect_render_benchmark(
     );
     *pending = false;
     Ok(())
+}
+
+fn occlusion_culling_enabled() -> bool {
+    std::env::var("NORD_OCCLUSION_CULLING")
+        .map_or(true, |value| value != "0" && !value.eq_ignore_ascii_case("false"))
 }
 
 fn create_game_camera(aspect_ratio: f32) -> nord_app::ApplicationResult<PerspectiveCamera> {
