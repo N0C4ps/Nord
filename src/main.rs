@@ -1,4 +1,5 @@
 mod app;
+mod camera;
 mod gameloop;
 mod physics;
 mod render;

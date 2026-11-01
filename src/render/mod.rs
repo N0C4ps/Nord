@@ -1,3 +1,4 @@
+use crate::camera::GameCameraController;
 use nord_app::{
     ApplicationBufferDesc, ApplicationBufferMemory, ApplicationBufferUsage, ApplicationClearColor,
     ApplicationColorAttachmentBinding, ApplicationCompiledShader, ApplicationDescriptorHandle,
@@ -40,7 +41,7 @@ pub(super) struct GameRenderer {
     index_count: u32,
     camera_buffer: nord_app::ApplicationGpuResourceHandle,
     camera_binding: ApplicationPipelineDescriptorBinding,
-    camera: PerspectiveCamera,
+    camera: GameCameraController,
     model: Mat4,
     pipeline: ApplicationGraphicsPipelineDesc,
     vertex_shader: ApplicationCompiledShader,
@@ -64,7 +65,7 @@ impl GameRenderer {
         height: u32,
     ) -> nord_app::ApplicationResult<Self> {
         let aspect_ratio = surface_aspect(width, height)?;
-        let camera = create_game_camera(aspect_ratio)?;
+        let camera = GameCameraController::new(create_game_camera(aspect_ratio)?, window);
         let mut renderer = ApplicationRenderer::initialize(
             platform,
             window,
@@ -292,6 +293,7 @@ impl GameRenderer {
         let pixel_shader = self.pixel_shader.clone();
         let view_projection = self
             .camera
+            .camera()
             .view_projection_matrix()
             .map_err(ApplicationDiagnosticError::msg)
             .context("building the game's view-projection matrix")?;
@@ -375,6 +377,17 @@ impl GameRenderer {
             .context("waiting for graphics frame readiness")
     }
 
+    pub(super) fn handle_input(
+        &mut self,
+        event: &nord_app::ApplicationInputEvent,
+    ) -> nord_app::ApplicationResult<()> {
+        self.camera.handle_input(event)
+    }
+
+    pub(super) fn reset_pointer_tracking(&mut self) {
+        self.camera.reset_pointer_tracking();
+    }
+
     pub(super) fn resize(&mut self, width: u32, height: u32) -> nord_app::ApplicationResult<()> {
         let renderer = self
             .renderer
@@ -404,6 +417,7 @@ impl GameRenderer {
             .context("resizing the Nord render surface")?;
         self.surface = Self::create_surface(renderer, width, height)?;
         self.camera
+            .camera_mut()
             .set_aspect_ratio(aspect_ratio)
             .map_err(ApplicationDiagnosticError::msg)
             .context("updating the game's camera projection after resize")

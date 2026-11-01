@@ -15,6 +15,8 @@ e apresentação pela infraestrutura gráfica da Nord.
   encoder, render graph, depth attachment e apresentação.
 - `src/render` escolhe a câmera, cria o cubo de demonstração, atualiza seus
   dados por frame, define o shader e registra o passe do jogo.
+- `src/camera.rs` conecta os eventos normalizados de `nord_inputs` à pose de
+  `nord_camera`; as duas crates continuam sem dependência direta entre si.
 
 ## Caminho do frame
 
@@ -27,6 +29,12 @@ e apresentação pela infraestrutura gráfica da Nord.
    colorida pela swapchain.
 6. Ao mudar o tamanho da janela, o jogo recria os attachments e atualiza o
    aspect ratio da câmera. Uma superfície minimizada não é renderizada.
+
+Enquanto o cursor se move dentro da janela do jogo, os deltas de pixel giram a
+câmera. O primeiro evento após iniciar ou recuperar o foco só estabelece a
+posição de referência, evitando um salto; o pitch é limitado antes de chegar à
+singularidade vertical. A rotação usa deltas do mouse e não depende do delta
+time do frame.
 
 O cubo usa escala uniforme e rotação, portanto transformar normais com a parte
 3×3 do modelo é válido nesta demonstração. Escala não uniforme exigirá matriz
