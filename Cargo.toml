@@ -30,6 +30,8 @@ members = [
     "crates/nord_physics",
     "crates/nord_platform",
     "crates/nord_math",
+    "crates/nord_camera",
+    "crates/nord_mesh",
 ]
 
 [workspace.package]
@@ -47,6 +49,9 @@ pedantic = "warn"
 [dependencies]
 ctrlc = "3.5.2"
 nord_app = { path = "crates/nord_app" }
+nord_camera = { path = "crates/nord_camera" }
+nord_mesh = { path = "crates/nord_mesh" }
+nord_math = { path = "crates/nord_math" }
 serde = { version = "1.0", features = ["derive"] }
 
 [profile.dev]
