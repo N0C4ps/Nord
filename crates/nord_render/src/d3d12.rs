@@ -1218,9 +1218,9 @@ impl D3d12Renderer {
                     }
                 }
                 BlendMode::Alpha => D3D12_BLEND_SRC_ALPHA,
-                BlendMode::InvertDestinationColor | BlendMode::HighContrastInvert => {
-                    D3D12_BLEND_INV_DEST_COLOR
-                }
+                BlendMode::InvertDestinationColor
+                | BlendMode::HighContrastInvert
+                | BlendMode::AdaptiveLight => D3D12_BLEND_INV_DEST_COLOR,
             },
             DestBlend: match description.blend_mode {
                 BlendMode::Opaque => {
@@ -1233,6 +1233,7 @@ impl D3d12Renderer {
                 BlendMode::Alpha => D3D12_BLEND_ZERO,
                 BlendMode::InvertDestinationColor => D3D12_BLEND_ZERO,
                 BlendMode::HighContrastInvert => D3D12_BLEND_ONE,
+                BlendMode::AdaptiveLight => D3D12_BLEND_SRC_ALPHA,
             },
             BlendOp: if description.blend_mode == BlendMode::HighContrastInvert {
                 D3D12_BLEND_OP_SUBTRACT

@@ -10,5 +10,5 @@ float4 VSMain(VertexInput input) : SV_Position
 
 float4 PSMain() : SV_Target0
 {
-    return float4(1.0, 1.0, 1.0, 1.0);
+    return float4(1.0, 1.0, 1.0, 0.75);
 }
