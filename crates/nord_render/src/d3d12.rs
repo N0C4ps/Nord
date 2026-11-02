@@ -1,13 +1,13 @@
 use crate::render_graph::{EncodedGraphicsDraw, EncodedGraphicsPass, IndexFormat};
 use crate::{
-    Allocation, AllocationClass, BufferDesc, BufferMemory, BufferUsage, ClearColor, CompiledShader,
-    ComputePipelineDesc, CullMode, DescriptorHandle, DescriptorKind, DrawCall, FRAMES_IN_FLIGHT,
-    FrontFace, GpuMemoryBudget, GpuMemorySegment, GpuResourceHandle, GraphResourceRef,
-    GraphicsPipelineDesc, PipelineCacheEntry, PipelineDescriptorTableBinding, PipelineKey,
-    PolygonFillMode, PrimitiveTopology, RenderBarrier, RenderBarrierKind, RenderConfig,
-    RenderError, RenderServices, RenderTargetDesc, ResourceKind, ResourceUsage, SamplerAddressMode,
-    SamplerDesc, SamplerFilter, ShaderBindingKind, ShaderStage, TextureDesc, TextureFormat,
-    TextureUsage, VertexFormat,
+    Allocation, AllocationClass, BlendMode, BufferDesc, BufferMemory, BufferUsage, ClearColor,
+    CompiledShader, ComputePipelineDesc, CullMode, DescriptorHandle, DescriptorKind, DrawCall,
+    FRAMES_IN_FLIGHT, FrontFace, GpuMemoryBudget, GpuMemorySegment, GpuResourceHandle,
+    GraphResourceRef, GraphicsPipelineDesc, PipelineCacheEntry, PipelineDescriptorTableBinding,
+    PipelineKey, PolygonFillMode, PrimitiveTopology, RenderBarrier, RenderBarrierKind,
+    RenderConfig, RenderError, RenderServices, RenderTargetDesc, ResourceKind, ResourceUsage,
+    SamplerAddressMode, SamplerDesc, SamplerFilter, ShaderBindingKind, ShaderStage, TextureDesc,
+    TextureFormat, TextureUsage, VertexFormat,
 };
 use raw_window_handle::RawWindowHandle;
 use std::collections::{HashMap, HashSet};
@@ -18,11 +18,11 @@ use std::ptr::NonNull;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND};
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 use windows::Win32::Graphics::Direct3D12::{
-    D3D_ROOT_SIGNATURE_VERSION_1, D3D12_BLEND_DESC, D3D12_BLEND_INV_SRC_ALPHA, D3D12_BLEND_ONE,
-    D3D12_BLEND_OP_ADD, D3D12_BLEND_SRC_ALPHA, D3D12_BLEND_ZERO, D3D12_BUFFER_SRV,
-    D3D12_BUFFER_SRV_FLAG_RAW, D3D12_BUFFER_UAV, D3D12_BUFFER_UAV_FLAG_RAW,
-    D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC, D3D12_COMMAND_SIGNATURE_DESC,
-    D3D12_COMPARISON_FUNC_ALWAYS, D3D12_COMPUTE_PIPELINE_STATE_DESC,
+    D3D_ROOT_SIGNATURE_VERSION_1, D3D12_BLEND_DESC, D3D12_BLEND_INV_DEST_COLOR,
+    D3D12_BLEND_INV_SRC_ALPHA, D3D12_BLEND_ONE, D3D12_BLEND_OP_ADD, D3D12_BLEND_SRC_ALPHA,
+    D3D12_BLEND_ZERO, D3D12_BUFFER_SRV, D3D12_BUFFER_SRV_FLAG_RAW, D3D12_BUFFER_UAV,
+    D3D12_BUFFER_UAV_FLAG_RAW, D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC,
+    D3D12_COMMAND_SIGNATURE_DESC, D3D12_COMPARISON_FUNC_ALWAYS, D3D12_COMPUTE_PIPELINE_STATE_DESC,
     D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF, D3D12_CONSTANT_BUFFER_VIEW_DESC,
     D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_CPU_PAGE_PROPERTY_UNKNOWN, D3D12_CULL_MODE_BACK,
     D3D12_CULL_MODE_FRONT, D3D12_CULL_MODE_NONE, D3D12_DEFAULT_DEPTH_BIAS,
@@ -1209,15 +1209,26 @@ impl D3d12Renderer {
             unsafe { self.device.CreateRootSignature(0, root_bytes) }.map_err(backend_error)?;
 
         let blend_target = D3D12_RENDER_TARGET_BLEND_DESC {
-            SrcBlend: if description.alpha_blending {
-                D3D12_BLEND_SRC_ALPHA
-            } else {
-                D3D12_BLEND_ONE
+            SrcBlend: match description.blend_mode {
+                BlendMode::Opaque => {
+                    if description.alpha_blending {
+                        D3D12_BLEND_SRC_ALPHA
+                    } else {
+                        D3D12_BLEND_ONE
+                    }
+                }
+                BlendMode::Alpha => D3D12_BLEND_SRC_ALPHA,
+                BlendMode::InvertDestinationColor => D3D12_BLEND_INV_DEST_COLOR,
             },
-            DestBlend: if description.alpha_blending {
-                D3D12_BLEND_INV_SRC_ALPHA
-            } else {
-                D3D12_BLEND_ZERO
+            DestBlend: match description.blend_mode {
+                BlendMode::Opaque => {
+                    if description.alpha_blending {
+                        D3D12_BLEND_INV_SRC_ALPHA
+                    } else {
+                        D3D12_BLEND_ZERO
+                    }
+                }
+                BlendMode::Alpha | BlendMode::InvertDestinationColor => D3D12_BLEND_ZERO,
             },
             BlendOp: D3D12_BLEND_OP_ADD,
             SrcBlendAlpha: D3D12_BLEND_ONE,
@@ -1225,7 +1236,9 @@ impl D3d12Renderer {
             BlendOpAlpha: D3D12_BLEND_OP_ADD,
             LogicOp: D3D12_LOGIC_OP_NOOP,
             RenderTargetWriteMask: 0x0f,
-            BlendEnable: windows::Win32::Foundation::BOOL::from(description.alpha_blending),
+            BlendEnable: windows::Win32::Foundation::BOOL::from(
+                description.alpha_blending || description.blend_mode != BlendMode::Opaque,
+            ),
             ..Default::default()
         };
         let mut blend_state = D3D12_BLEND_DESC::default();

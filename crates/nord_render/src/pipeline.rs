@@ -45,6 +45,17 @@ pub enum PolygonFillMode {
     Wireframe,
 }
 
+/// Color blend operation applied to a graphics pipeline's render targets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BlendMode {
+    /// Replace the target with the pixel shader output.
+    Opaque,
+    /// Composite using the pixel shader's alpha.
+    Alpha,
+    /// Multiply white source pixels by one minus the destination color.
+    InvertDestinationColor,
+}
+
 /// Input-assembler attribute format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum VertexFormat {
@@ -103,6 +114,9 @@ pub struct GraphicsPipelineDesc {
     pub depth_test: bool,
     pub depth_write: bool,
     pub alpha_blending: bool,
+    /// Explicit color blend operation. When set to `Alpha`, this takes
+    /// precedence over the legacy `alpha_blending` switch.
+    pub blend_mode: BlendMode,
     pub topology: PrimitiveTopology,
     pub cull_mode: CullMode,
     pub front_face: FrontFace,
@@ -135,6 +149,7 @@ impl GraphicsPipelineDesc {
             depth_test: false,
             depth_write: false,
             alpha_blending: false,
+            blend_mode: BlendMode::Opaque,
             topology: PrimitiveTopology::Triangle,
             cull_mode: CullMode::Back,
             front_face: FrontFace::CounterClockwise,
@@ -147,6 +162,13 @@ impl GraphicsPipelineDesc {
     #[must_use]
     pub fn with_vertex_attribute(mut self, attribute: VertexAttribute) -> Self {
         self.vertex_attributes.push(attribute);
+        self
+    }
+
+    /// Select a fixed-function color blend operation.
+    #[must_use]
+    pub const fn with_blend_mode(mut self, mode: BlendMode) -> Self {
+        self.blend_mode = mode;
         self
     }
 

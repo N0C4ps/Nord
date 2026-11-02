@@ -26,8 +26,9 @@ pub use nord_render::{
 /// through the application-owned renderer facade.
 pub use nord_render::{
     Allocation as ApplicationGpuAllocation, AllocationClass as ApplicationGpuAllocationClass,
-    BufferDesc as ApplicationBufferDesc, BufferMemory as ApplicationBufferMemory,
-    BufferUsage as ApplicationBufferUsage, CompiledShader as ApplicationCompiledShader,
+    BlendMode as ApplicationBlendMode, BufferDesc as ApplicationBufferDesc,
+    BufferMemory as ApplicationBufferMemory, BufferUsage as ApplicationBufferUsage,
+    CompiledShader as ApplicationCompiledShader,
     ComputePipelineDesc as ApplicationComputePipelineDesc, CullMode as ApplicationCullMode,
     DeferredGpuAllocator as ApplicationDeferredGpuAllocator,
     DescriptorHandle as ApplicationDescriptorHandle, DescriptorKind as ApplicationDescriptorKind,

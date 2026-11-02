@@ -25,7 +25,7 @@ pub use descriptors::{
     SamplerDescriptionError, SamplerFilter,
 };
 pub use pipeline::{
-    ComputePipelineDesc, CullMode, FrontFace, GraphicsPipelineDesc, PipelineCache,
+    BlendMode, ComputePipelineDesc, CullMode, FrontFace, GraphicsPipelineDesc, PipelineCache,
     PipelineCacheEntry, PipelineKey, PolygonFillMode, PrimitiveTopology, ShaderId, ShaderStage,
     VertexAttribute, VertexFormat,
 };

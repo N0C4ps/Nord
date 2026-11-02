@@ -48,7 +48,8 @@ impl Crosshair {
             vertex_shader.shader_id,
             pixel_shader.shader_id,
             ApplicationTextureFormat::Rgba8Unorm,
-        );
+        )
+        .with_blend_mode(nord_app::ApplicationBlendMode::InvertDestinationColor);
         pipeline.depth_format = Some(ApplicationTextureFormat::D32Float);
         pipeline.depth_test = false;
         pipeline.depth_write = false;
