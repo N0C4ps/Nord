@@ -2,20 +2,22 @@ use nord_app::{
     ApplicationBufferDesc, ApplicationBufferMemory, ApplicationBufferUsage,
     ApplicationColorAttachmentBinding, ApplicationComputePipelineDesc, ApplicationCullMode,
     ApplicationDrawCall, ApplicationFrontFace, ApplicationGraphicsPipelineDesc,
-    ApplicationIndexBufferBinding, ApplicationIndexFormat, ApplicationPipelineDescriptorBinding,
-    ApplicationPipelineDescriptorTableBinding, ApplicationPlatform, ApplicationPolygonFillMode,
-    ApplicationPrimitiveTopology, ApplicationRenderBarrierKind, ApplicationRenderConfig,
-    ApplicationRenderPassDesc, ApplicationRenderQueue, ApplicationRenderTargetDesc,
-    ApplicationRenderer, ApplicationResourceUsage, ApplicationSamplerDesc, ApplicationScissorRect,
+    ApplicationIndexBufferBinding, ApplicationIndexFormat, ApplicationJobSystem,
+    ApplicationPipelineDescriptorBinding, ApplicationPipelineDescriptorTableBinding,
+    ApplicationPlatform, ApplicationPolygonFillMode, ApplicationPrimitiveTopology,
+    ApplicationRenderBarrierKind, ApplicationRenderConfig, ApplicationRenderPassDesc,
+    ApplicationRenderQueue, ApplicationRenderTargetDesc, ApplicationRenderer,
+    ApplicationResourceUsage, ApplicationSamplerDesc, ApplicationScissorRect,
     ApplicationShaderBindingKind, ApplicationShaderCompileOptions, ApplicationShaderCompiler,
     ApplicationShaderResourceBinding, ApplicationShaderStage, ApplicationTextureDesc,
-    ApplicationTextureFormat, ApplicationTextureUsage, ApplicationVertexAttribute,
-    ApplicationVertexBufferBinding, ApplicationVertexFormat, ApplicationViewport,
-    ApplicationWindowConfig,
+    ApplicationTextureFormat, ApplicationTextureUsage, ApplicationThreadPool,
+    ApplicationThreadPoolConfig, ApplicationVertexAttribute, ApplicationVertexBufferBinding,
+    ApplicationVertexFormat, ApplicationViewport, ApplicationWindowConfig,
 };
 use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let platform = ApplicationPlatform::initialize("nord-render-smoke")?;
@@ -37,6 +39,8 @@ fn validate_resources(
     platform: &ApplicationPlatform,
     window: nord_app::ApplicationWindowHandle,
 ) -> Result<(), Box<dyn Error>> {
+    let pool = Arc::new(ApplicationThreadPool::new(ApplicationThreadPoolConfig::default())?);
+    let jobs = ApplicationJobSystem::new(pool);
     let mut renderer =
         ApplicationRenderer::initialize(platform, window, ApplicationRenderConfig::new(128, 128))?;
     println!("PASS: D3D12 device, swapchain, and frame submission");
@@ -425,7 +429,7 @@ fn validate_resources(
         },
     )?;
     assert!(
-        renderer.submit_render_queue(&mut invalid_graph).is_err(),
+        renderer.submit_render_queue(&mut invalid_graph, &jobs).is_err(),
         "a pass must declare every GPU resource referenced by shader descriptors"
     );
     println!("PASS: graph rejects undeclared shader descriptor resources before submission");
@@ -667,7 +671,7 @@ fn validate_resources(
         },
     )?;
     let graph = renderer
-        .submit_render_queue(&mut queue)
+        .submit_render_queue(&mut queue, &jobs)
         .map_err(|error| format!("submitting render queue: {error:?}"))?;
     let left_pixel = renderer.read_texture_pixel(color_target, 12, 16)?;
     let right_pixel = renderer.read_texture_pixel(color_target, 24, 16)?;

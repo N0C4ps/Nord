@@ -1269,6 +1269,7 @@ impl<E> RenderQueue<E> {
     /// Returns graph compilation, pass encoder, or repeated-submission errors.
     pub fn encode_parallel(
         &mut self,
+        jobs: &nord_jobs::JobSystem,
     ) -> Result<(CompiledRenderGraph, Vec<RenderCommandBuffer>), RenderQueueError<E>>
     where
         E: Send,
@@ -1285,44 +1286,39 @@ impl<E> RenderQueue<E> {
                     .ok_or(RenderQueueError::AlreadySubmitted(RenderPassId(index)))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let work = std::sync::Mutex::new(std::collections::VecDeque::from(callbacks));
-        let worker_count = std::thread::available_parallelism()
-            .map_or(1, std::num::NonZeroUsize::get)
-            .min(self.callbacks.len());
-        let encoded = std::thread::scope(|scope| {
-            let workers = (0..worker_count)
-                .map(|_| {
-                    scope.spawn(|| {
-                        let mut local = Vec::new();
-                        loop {
-                            let task = match work.lock() {
-                                Ok(mut work) => work.pop_front(),
-                                Err(_) => return Err(RenderQueueError::EncodingWorkerPanicked),
-                            };
-                            let Some((pass, callback)) = task else { break };
-                            let mut encoder = RenderCommandEncoder::default();
-                            let result = callback(&mut encoder)
-                                .map_err(|source| RenderQueueError::Pass { pass, source })
-                                .and_then(|()| {
-                                    encoder.finish().map(|commands| (pass, commands)).map_err(
-                                        |source| RenderQueueError::Encoding { pass, source },
-                                    )
-                                });
-                            local.push(result);
-                        }
-                        Ok(local)
-                    })
-                })
-                .collect::<Vec<_>>();
-            let batches = workers
-                .into_iter()
-                .map(|worker| {
-                    worker.join().map_err(|_| RenderQueueError::EncodingWorkerPanicked)?
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok::<_, RenderQueueError<E>>(batches.into_iter().flatten().collect::<Vec<_>>())
-        })?;
-        let mut encoded = encoded.into_iter().collect::<Result<Vec<_>, _>>()?;
+        let mut work =
+            callbacks.into_iter().map(|callback| (Some(callback), None)).collect::<Vec<_>>();
+        let encode = |(task, result): &mut (
+            Option<(RenderPassId, RenderPassCallback<E>)>,
+            Option<Result<(RenderPassId, RenderCommandBuffer), RenderQueueError<E>>>,
+        )| {
+            let Some((pass, callback)) = task.take() else {
+                *result = Some(Err(RenderQueueError::EncodingWorkerPanicked));
+                return;
+            };
+            let mut encoder = RenderCommandEncoder::default();
+            *result = Some(
+                callback(&mut encoder)
+                    .map_err(|source| RenderQueueError::Pass { pass, source })
+                    .and_then(|()| {
+                        encoder
+                            .finish()
+                            .map(|commands| (pass, commands))
+                            .map_err(|source| RenderQueueError::Encoding { pass, source })
+                    }),
+            );
+        };
+        if work.len() <= 1 {
+            for item in &mut work {
+                encode(item);
+            }
+        } else {
+            jobs.for_each_mut(&mut work, encode);
+        }
+        let mut encoded = work
+            .into_iter()
+            .map(|(_, result)| result.unwrap_or(Err(RenderQueueError::EncodingWorkerPanicked)))
+            .collect::<Result<Vec<_>, _>>()?;
         encoded.sort_by_key(|(pass, _)| pass.index());
         let buffers = encoded.into_iter().map(|(_, commands)| commands).collect::<Vec<_>>();
         for (index, buffer) in buffers.iter().enumerate() {
@@ -1391,6 +1387,13 @@ mod tests {
     };
     use crate::{ClearColor, DescriptorArena, DescriptorKind, GpuResourceHandle, ResourceKind};
     use std::num::NonZeroU32;
+    use std::sync::Arc;
+
+    fn job_system() -> nord_jobs::JobSystem {
+        let pool =
+            nord_threading::ThreadPool::new(nord_threading::ThreadPoolConfig::default()).unwrap();
+        nord_jobs::JobSystem::new(Arc::new(pool))
+    }
 
     fn resource(index: u32) -> GpuResourceHandle {
         GpuResourceHandle::new(index, NonZeroU32::MIN, ResourceKind::Texture)
@@ -1602,7 +1605,8 @@ mod tests {
                 },
             )
             .unwrap();
-        let (plan, buffers) = queue.encode_parallel().unwrap();
+        let jobs = job_system();
+        let (plan, buffers) = queue.encode_parallel(&jobs).unwrap();
         assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 2);
         assert_eq!(buffers.len(), 2);
         assert_eq!(plan.passes()[0].name, "produce");
@@ -1626,7 +1630,7 @@ mod tests {
             })
             .unwrap();
         assert!(matches!(
-            unclosed.encode_parallel(),
+            unclosed.encode_parallel(&job_system()),
             Err(RenderQueueError::Encoding {
                 source: RenderCommandEncodingError::GraphicsPassNotEnded,
                 ..
@@ -1644,7 +1648,7 @@ mod tests {
             })
             .unwrap();
         assert!(matches!(
-            undeclared.encode_parallel(),
+            undeclared.encode_parallel(&job_system()),
             Err(RenderQueueError::ResourceUsageMismatch {
                 resource: GraphResourceRef::Imported(handle),
                 expected: ResourceUsage::ColorAttachmentWrite,

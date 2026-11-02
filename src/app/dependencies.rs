@@ -1,18 +1,16 @@
-use super::config::{GameConfig, TasksConfig};
+use super::config::GameConfig;
 use crate::render::GameRenderer;
 use nord_app::{
     ApplicationConfigLoader, ApplicationCrashReporter, ApplicationCrashReporterConfig,
     ApplicationDiagnosticError, ApplicationErrorContext, ApplicationEventSystem,
     ApplicationInputSystem, ApplicationJobSystem, ApplicationJsonFileConfig, ApplicationLogger,
     ApplicationLoggerConfig, ApplicationMemoryManager, ApplicationOpenTelemetryConfig,
-    ApplicationPlatform, ApplicationResult, ApplicationSchedulerConfig, ApplicationServicesBuilder,
-    ApplicationTaskScheduler, ApplicationThreadPool, ApplicationThreadPoolConfig,
-    ApplicationWindowConfig,
+    ApplicationPlatform, ApplicationResult, ApplicationServicesBuilder, ApplicationThreadPool,
+    ApplicationThreadPoolConfig, ApplicationWindowConfig,
 };
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
 pub(super) struct AppDependencies {
     pub(super) config: Arc<GameConfig>,
@@ -25,7 +23,6 @@ pub(super) struct AppDependencies {
     pub(super) events: Arc<ApplicationEventSystem>,
     pub(super) inputs: Arc<ApplicationInputSystem>,
     pub(super) jobs: Arc<ApplicationJobSystem>,
-    pub(super) scheduler: Arc<ApplicationTaskScheduler>,
 }
 
 impl AppDependencies {
@@ -87,7 +84,6 @@ impl AppDependencies {
         }
         .context("loading and validating game configuration")?;
         let configured_worker_threads = config.threading.worker_threads;
-        let configured_task_settings = config.tasks.clone();
         let events = Arc::new(ApplicationEventSystem::new());
         let inputs = Arc::new(ApplicationInputSystem::new());
         let memory = ApplicationMemoryManager::new(None);
@@ -108,7 +104,6 @@ impl AppDependencies {
                 .context("creating the CPU worker pool")?,
         );
         let jobs = Arc::new(ApplicationJobSystem::new(Arc::clone(&thread_pool)));
-        let scheduler = create_scheduler(&thread_pool, &configured_task_settings)?;
         if let Some(error) = &crash_reporter.diagnostics().native_minidump_error {
             nord_app::warn!(
                 name: "native_crash_dumps_unavailable",
@@ -127,7 +122,6 @@ impl AppDependencies {
         builder.register(memory).context("registering application memory manager")?;
         builder.register_shared(thread_pool).context("registering the worker pool")?;
         builder.register_shared(jobs).context("registering the job system")?;
-        builder.register_shared(scheduler).context("registering the task scheduler")?;
 
         // Keep the DI implementation behind this game-owned composition adapter.
         let container = builder.build();
@@ -144,11 +138,15 @@ impl AppDependencies {
         let main_window = *container
             .get::<nord_app::ApplicationWindowHandle>()
             .context("resolving the main game window from application services")?;
+        let jobs = container
+            .get::<ApplicationJobSystem>()
+            .context("resolving the job system from application services")?;
         let renderer = GameRenderer::initialize(
             &platform,
             main_window,
             config.window.width,
             config.window.height,
+            (*jobs).clone(),
         )?;
         Ok(Self {
             config,
@@ -170,12 +168,7 @@ impl AppDependencies {
             inputs: container
                 .get::<ApplicationInputSystem>()
                 .context("resolving the input system")?,
-            jobs: container
-                .get::<ApplicationJobSystem>()
-                .context("resolving the job system from application services")?,
-            scheduler: container
-                .get::<ApplicationTaskScheduler>()
-                .context("resolving the task scheduler from application services")?,
+            jobs,
         })
     }
 }
@@ -280,29 +273,4 @@ fn log_display_summary(platform: &ApplicationPlatform) {
             "Could not enumerate connected displays"
         ),
     }
-}
-
-fn create_scheduler(
-    thread_pool: &Arc<ApplicationThreadPool>,
-    settings: &TasksConfig,
-) -> ApplicationResult<Arc<ApplicationTaskScheduler>> {
-    let queue_capacity = NonZeroUsize::new(settings.queue_capacity).ok_or_else(|| {
-        ApplicationDiagnosticError::msg("tasks.queue_capacity must be greater than zero")
-    })?;
-    let max_in_flight = match settings.max_in_flight {
-        Some(count) => Some(NonZeroUsize::new(count).ok_or_else(|| {
-            ApplicationDiagnosticError::msg(
-                "tasks.max_in_flight must be greater than zero when set",
-            )
-        })?),
-        None => None,
-    };
-    let scheduler_config = ApplicationSchedulerConfig::default()
-        .with_queue_capacity(queue_capacity)
-        .with_max_in_flight(max_in_flight)
-        .with_priority_aging_interval(Duration::from_millis(settings.priority_aging_interval_ms));
-    Ok(Arc::new(
-        ApplicationTaskScheduler::new(Arc::clone(thread_pool), scheduler_config)
-            .context("creating the task scheduler")?,
-    ))
 }

@@ -64,9 +64,6 @@ semantics.
 | `window.height` | `720` | Positive client height in pixels |
 | `window.resizable` | `true` | Boolean |
 | `threading.worker_threads` | available parallelism minus one, minimum one | Positive integer when set |
-| `tasks.queue_capacity` | `2048` | Positive integer |
-| `tasks.max_in_flight` | worker-pool size | Positive integer when set; cannot exceed worker count |
-| `tasks.priority_aging_interval_ms` | `250` | Positive integer |
 | `timing.max_frame_delta_ms` | `250` | 1–60,000 |
 | `timing.fixed_step_ns` | `16,666,667` | 1–10,000,000,000 |
 | `timing.max_steps_per_frame` | `8` | 1–1,000 |

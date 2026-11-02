@@ -1,7 +1,8 @@
 use nord_threading::ThreadPool;
 use rayon::iter::IndexedParallelIterator;
 use rayon::prelude::{
-    IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator, ParallelSliceMut,
+    IntoParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator,
+    ParallelSliceMut,
 };
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -58,6 +59,24 @@ impl JobSystem {
         Operation: Fn(&T) -> Output + Send + Sync,
     {
         self.pool.install(|| items.par_iter().map(operation).collect())
+    }
+
+    /// Consume owned items in parallel, preserving their input order in the result.
+    ///
+    /// Use this when workers need ownership of per-item state, such as native
+    /// command-list recording snapshots.
+    #[must_use]
+    pub fn map_owned<T, Output, Operation>(
+        &self,
+        items: Vec<T>,
+        operation: Operation,
+    ) -> Vec<Output>
+    where
+        T: Send,
+        Output: Send,
+        Operation: Fn(T) -> Output + Send + Sync,
+    {
+        self.pool.install(|| items.into_par_iter().map(operation).collect())
     }
 
     /// Partition a mutable slice into non-overlapping chunks and process them.

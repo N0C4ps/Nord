@@ -597,11 +597,12 @@ impl Renderer {
         &self,
         graph: &CompiledRenderGraph,
         resources: &TransientResources,
+        jobs: &nord_jobs::JobSystem,
     ) -> Result<RecordedGraphBarriers, RenderError> {
         #[cfg(target_os = "windows")]
         {
             self.backend
-                .record_graph_barriers_parallel(graph, &resources.handles)
+                .record_graph_barriers_parallel(graph, &resources.handles, jobs)
                 .map(|backend| RecordedGraphBarriers { backend })
         }
         #[cfg(not(target_os = "windows"))]
@@ -640,11 +641,18 @@ impl Renderer {
         graph: &CompiledRenderGraph,
         resources: &TransientResources,
         buffers: &[RenderCommandBuffer],
+        jobs: &nord_jobs::JobSystem,
     ) -> Result<RecordedGraphCommands, RenderError> {
         #[cfg(target_os = "windows")]
         {
             self.backend
-                .record_graph_commands_parallel(&self.services, graph, &resources.handles, buffers)
+                .record_graph_commands_parallel(
+                    &self.services,
+                    graph,
+                    &resources.handles,
+                    buffers,
+                    jobs,
+                )
                 .map(|backend| RecordedGraphCommands { backend })
         }
         #[cfg(not(target_os = "windows"))]

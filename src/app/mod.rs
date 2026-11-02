@@ -74,7 +74,6 @@ impl Application {
             );
         }
         self.destroy_main_window();
-        self.stop_scheduler();
         self.report_logging_health();
         self.log_stopped(shutdown_reason, &game_loop);
         self.flush_logs();
@@ -100,7 +99,6 @@ impl Application {
                     platform_backend = ?self.dependencies.platform.backend(),
                     platform_architecture = self.dependencies.platform.architecture(),
                     job_worker_threads = self.dependencies.jobs.worker_threads().get(),
-                    task_queue_capacity = self.dependencies.scheduler.config().queue_capacity().get(),
                     "Nord application runtime started"
                 );
                 (Some(runtime), None)
@@ -181,19 +179,6 @@ impl Application {
         }
     }
 
-    fn stop_scheduler(&self) {
-        if let Err(error) =
-            self.dependencies.scheduler.shutdown(nord_app::ApplicationShutdownMode::CancelPending)
-        {
-            nord_app::warn!(
-                name: "task_scheduler_shutdown_failed",
-                target: "nord::scheduler",
-                %error,
-                "Task scheduler did not shut down cleanly"
-            );
-        }
-    }
-
     fn destroy_main_window(&self) {
         if let Err(error) = self.dependencies.platform.destroy_window(self.dependencies.main_window)
         {
@@ -207,7 +192,6 @@ impl Application {
     }
 
     fn log_stopped(&self, reason: ShutdownReason, game_loop: &GameLoop) {
-        let task_stats = self.dependencies.scheduler.snapshot();
         nord_app::info!(
             name: "application_stopped",
             target: "nord::app",
@@ -217,10 +201,6 @@ impl Application {
             scheduled_simulation_steps = game_loop.scheduled_steps(),
             dropped_simulation_time_ms = game_loop.dropped_simulation_time().as_millis(),
             last_fps = ?game_loop.latest_fps(),
-            tasks_submitted = task_stats.submitted,
-            tasks_completed = task_stats.completed,
-            tasks_cancelled = task_stats.cancelled,
-            tasks_rejected = task_stats.rejected,
             "Nord application runtime stopped"
         );
     }

@@ -2630,6 +2630,7 @@ impl D3d12Renderer {
         &self,
         graph: &crate::CompiledRenderGraph,
         transients: &[Option<GpuResourceHandle>],
+        job_system: &nord_jobs::JobSystem,
     ) -> Result<RecordedGraphBarriers, RenderError> {
         let mut planned_states = HashMap::<usize, D3D12_RESOURCE_STATES>::new();
         let mut jobs = Vec::with_capacity(graph.passes().len());
@@ -2680,125 +2681,70 @@ impl D3d12Renderer {
         }
 
         let device = self.device.clone();
-        let worker_count = std::thread::available_parallelism()
-            .map_or(1, std::num::NonZeroUsize::get)
-            .min(jobs.len());
-        if worker_count == 0 {
-            return Ok(RecordedGraphBarriers { passes: Vec::new() });
-        }
-        let mut partitions = (0..worker_count).map(|_| Vec::new()).collect::<Vec<_>>();
-        for (index, job) in jobs.into_iter().enumerate() {
-            partitions[index % worker_count].push(job);
-        }
-        let recorded = std::thread::scope(|scope| {
-            let workers = partitions
-                .into_iter()
-                .map(|partition| {
-                    let device = device.clone();
-                    scope.spawn(move || -> Result<Vec<(usize, Option<RecordedBarrierPass>)>, RenderError> {
-                        partition
-                            .into_iter()
-                            .map(|(pass_index, barriers, state_updates)| {
-                                if barriers.is_empty() {
-                                    return Ok((pass_index, None));
-                                }
-                                let allocator: ID3D12CommandAllocator = unsafe {
-                                    device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT)
-                                }
-                                .map_err(backend_error)?;
-                                let list: ID3D12GraphicsCommandList = unsafe {
-                                    device.CreateCommandList(
-                                        0,
-                                        D3D12_COMMAND_LIST_TYPE_DIRECT,
-                                        &allocator,
-                                        None,
-                                    )
-                                }
-                                .map_err(backend_error)?;
-                                let mut native = barriers
-                                    .into_iter()
-                                    .map(|barrier| match barrier {
-                                        PendingGraphBarrier::Transition(
-                                            resource,
-                                            before,
-                                            after,
-                                        ) => transition(&resource, before, after),
-                                        PendingGraphBarrier::Uav(resource) => {
-                                            uav_barrier(&resource)
-                                        }
-                                        PendingGraphBarrier::Aliasing(before, after) => {
-                                            D3D12_RESOURCE_BARRIER {
-                                                Type: D3D12_RESOURCE_BARRIER_TYPE_ALIASING,
-                                                Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
-                                                Anonymous: D3D12_RESOURCE_BARRIER_0 {
-                                                    Aliasing: ManuallyDrop::new(
-                                                        D3D12_RESOURCE_ALIASING_BARRIER {
-                                                            pResourceBefore: ManuallyDrop::new(
-                                                                before,
-                                                            ),
-                                                            pResourceAfter: ManuallyDrop::new(
-                                                                Some(after),
-                                                            ),
-                                                        },
-                                                    ),
-                                                },
-                                            }
-                                        }
-                                    })
-                                    .collect::<Vec<_>>();
-                                // SAFETY: this worker owns a unique allocator/list pair and
-                                // all COM resources in the barrier descriptors stay alive.
-                                unsafe {
-                                    list.ResourceBarrier(&native);
-                                    for barrier in &mut native {
-                                        match barrier.Type {
-                                            D3D12_RESOURCE_BARRIER_TYPE_TRANSITION => {
-                                                let transition = &mut barrier.Anonymous.Transition;
-                                                drop(ManuallyDrop::take(&mut transition.pResource));
-                                            }
-                                            D3D12_RESOURCE_BARRIER_TYPE_UAV => {
-                                                let uav = &mut barrier.Anonymous.UAV;
-                                                drop(ManuallyDrop::take(&mut uav.pResource));
-                                            }
-                                            D3D12_RESOURCE_BARRIER_TYPE_ALIASING => {
-                                                let aliasing = &mut barrier.Anonymous.Aliasing;
-                                                drop(ManuallyDrop::take(
-                                                    &mut aliasing.pResourceBefore,
-                                                ));
-                                                drop(ManuallyDrop::take(
-                                                    &mut aliasing.pResourceAfter,
-                                                ));
-                                            }
-                                            _ => unreachable!(),
-                                        }
-                                    }
-                                    list.Close().map_err(backend_error)?;
-                                }
-                                Ok((pass_index, Some(RecordedBarrierPass {
-                                    _allocator: allocator,
-                                    list,
-                                    state_updates,
-                                })))
-                            })
-                            .collect()
+        let recorded = job_system
+            .map_owned(jobs, move |(pass_index, barriers, state_updates)| {
+                if barriers.is_empty() {
+                    return Ok((pass_index, None));
+                }
+                let allocator: ID3D12CommandAllocator =
+                    unsafe { device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT) }
+                        .map_err(backend_error)?;
+                let list: ID3D12GraphicsCommandList = unsafe {
+                    device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator, None)
+                }
+                .map_err(backend_error)?;
+                let mut native = barriers
+                    .into_iter()
+                    .map(|barrier| match barrier {
+                        PendingGraphBarrier::Transition(resource, before, after) => {
+                            transition(&resource, before, after)
+                        }
+                        PendingGraphBarrier::Uav(resource) => uav_barrier(&resource),
+                        PendingGraphBarrier::Aliasing(before, after) => D3D12_RESOURCE_BARRIER {
+                            Type: D3D12_RESOURCE_BARRIER_TYPE_ALIASING,
+                            Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
+                            Anonymous: D3D12_RESOURCE_BARRIER_0 {
+                                Aliasing: ManuallyDrop::new(D3D12_RESOURCE_ALIASING_BARRIER {
+                                    pResourceBefore: ManuallyDrop::new(before),
+                                    pResourceAfter: ManuallyDrop::new(Some(after)),
+                                }),
+                            },
+                        },
                     })
-                })
-                .collect::<Vec<_>>();
-            workers
-                .into_iter()
-                .map(|worker| {
-                    worker.join().map_err(|_| {
-                        RenderError::Backend(
-                            "render graph command-list recording worker panicked".into(),
-                        )
-                    })?
-                })
-                .collect::<Result<Vec<_>, RenderError>>()
-                .map(|partitions| partitions.into_iter().flatten().collect::<Vec<_>>())
-        })?;
-        // Worker partitions complete in worker order, not graph order. Preserve
-        // the exact pass slot (including passes with no barriers) so submission
-        // cannot silently execute a later pass's barriers before the wrong pass.
+                    .collect::<Vec<_>>();
+                // SAFETY: this pool task owns a unique allocator/list pair and
+                // all COM resources in the barrier descriptors stay alive.
+                unsafe {
+                    list.ResourceBarrier(&native);
+                    for barrier in &mut native {
+                        match barrier.Type {
+                            D3D12_RESOURCE_BARRIER_TYPE_TRANSITION => {
+                                let transition = &mut barrier.Anonymous.Transition;
+                                drop(ManuallyDrop::take(&mut transition.pResource));
+                            }
+                            D3D12_RESOURCE_BARRIER_TYPE_UAV => {
+                                let uav = &mut barrier.Anonymous.UAV;
+                                drop(ManuallyDrop::take(&mut uav.pResource));
+                            }
+                            D3D12_RESOURCE_BARRIER_TYPE_ALIASING => {
+                                let aliasing = &mut barrier.Anonymous.Aliasing;
+                                drop(ManuallyDrop::take(&mut aliasing.pResourceBefore));
+                                drop(ManuallyDrop::take(&mut aliasing.pResourceAfter));
+                            }
+                            _ => unreachable!(),
+                        }
+                    }
+                    list.Close().map_err(backend_error)?;
+                }
+                Ok((
+                    pass_index,
+                    Some(RecordedBarrierPass { _allocator: allocator, list, state_updates }),
+                ))
+            })
+            .into_iter()
+            .collect::<Result<Vec<_>, RenderError>>()?;
+        // Preserve each pass's exact slot (including passes with no barriers),
+        // regardless of the worker-pool completion order.
         let mut passes =
             std::iter::repeat_with(|| None).take(graph.passes().len()).collect::<Vec<_>>();
         for (pass_index, pass) in recorded {
@@ -2831,6 +2777,7 @@ impl D3d12Renderer {
         graph: &crate::CompiledRenderGraph,
         transients: &[Option<GpuResourceHandle>],
         buffers: &[crate::RenderCommandBuffer],
+        job_system: &nord_jobs::JobSystem,
     ) -> Result<RecordedGraphCommands, RenderError> {
         for (pass_index, buffer) in buffers.iter().enumerate() {
             let pass = graph
@@ -2883,40 +2830,12 @@ impl D3d12Renderer {
         if jobs.is_empty() {
             return Ok(RecordedGraphCommands { passes: Vec::new() });
         }
-        let worker_count = std::thread::available_parallelism()
-            .map_or(1, std::num::NonZeroUsize::get)
-            .min(jobs.len());
-        let mut partitions = (0..worker_count).map(|_| Vec::new()).collect::<Vec<_>>();
-        for job in jobs {
-            let index = job.0;
-            partitions[index % worker_count].push(job);
-        }
-        let recorded = std::thread::scope(|scope| {
-            let workers = partitions
-                .into_iter()
-                .map(|partition| {
-                    scope.spawn(move || {
-                        partition
-                            .into_iter()
-                            .map(|(index, renderer, services, commands)| {
-                                renderer
-                                    .record_commands(&commands, services)
-                                    .map(|recorded| (index, recorded))
-                            })
-                            .collect::<Result<Vec<_>, RenderError>>()
-                    })
-                })
-                .collect::<Vec<_>>();
-            workers
-                .into_iter()
-                .map(|worker| {
-                    worker.join().map_err(|_| {
-                        RenderError::Backend("render command encoder worker panicked".into())
-                    })?
-                })
-                .collect::<Result<Vec<_>, RenderError>>()
-                .map(|partitions| partitions.into_iter().flatten().collect::<Vec<_>>())
-        })?;
+        let recorded = job_system
+            .map_owned(jobs, |(index, renderer, services, commands)| {
+                renderer.record_commands(&commands, services).map(|recorded| (index, recorded))
+            })
+            .into_iter()
+            .collect::<Result<Vec<_>, RenderError>>()?;
         let mut passes = std::iter::repeat_with(Vec::new).take(buffers.len()).collect::<Vec<_>>();
         for (index, command_lists) in recorded {
             passes[index] = command_lists;

@@ -7,7 +7,6 @@ pub(crate) struct GameConfig {
     pub(crate) application: ApplicationConfig,
     pub(crate) window: WindowConfig,
     pub(crate) threading: ThreadingConfig,
-    pub(crate) tasks: TasksConfig,
     pub(crate) timing: TimingConfig,
 }
 
@@ -37,15 +36,6 @@ impl GameConfig {
         }
         if self.threading.worker_threads == Some(0) {
             return Err("threading.worker_threads must be greater than zero".to_owned());
-        }
-        if self.tasks.queue_capacity == 0 {
-            return Err("tasks.queue_capacity must be greater than zero".to_owned());
-        }
-        if self.tasks.max_in_flight == Some(0) {
-            return Err("tasks.max_in_flight must be greater than zero when set".to_owned());
-        }
-        if self.tasks.priority_aging_interval_ms == 0 {
-            return Err("tasks.priority_aging_interval_ms must be greater than zero".to_owned());
         }
         Ok(())
     }
@@ -82,20 +72,6 @@ impl Default for ApplicationConfig {
 pub(crate) struct ThreadingConfig {
     /// `None` selects a worker count from available parallelism.
     pub(crate) worker_threads: Option<usize>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub(crate) struct TasksConfig {
-    pub(crate) queue_capacity: usize,
-    pub(crate) max_in_flight: Option<usize>,
-    pub(crate) priority_aging_interval_ms: u64,
-}
-
-impl Default for TasksConfig {
-    fn default() -> Self {
-        Self { queue_capacity: 2_048, max_in_flight: None, priority_aging_interval_ms: 250 }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

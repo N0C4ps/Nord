@@ -1,19 +1,20 @@
 # Threading, jobs, and task scheduling
 
 `nord_threading` owns the worker-pool lifecycle and exposes an opaque,
-configurable pool. `nord_jobs` exposes data-parallel operations over slices and
-independent task joins. `nord_scheduler` owns coarse task submission, queue
-policy, cancellation, handles, and shutdown. `nord_app` provides the stable
-game-facing facade and registers these services during bootstrap. The game does
-not depend directly on Rayon or the engine crates.
+configurable pool. `nord_jobs` exposes data-parallel operations over slices,
+owned items, and independent task joins. The game creates one pool during
+startup and uses it for render-graph callback encoding and D3D12 barrier and
+command-list recording. `nord_scheduler` remains available as a crate, but the
+current game does not construct it because there are no independently
+cancellable background tasks to submit yet.
 
 ## First scheduler: Rayon
 
-The initial task scheduler is Rayon itself. It provides a work-stealing pool,
-parallel iteration, and fork-join scheduling; we do not maintain a second queue
-or worker loop. The engine creates an owned pool rather than configuring the
-process-global pool, making its lifetime and worker count explicit. Pools are
-constructed once in application startup and shared through the DI container.
+Rayon provides the pool's work-stealing parallel iteration and fork-join
+execution; the game does not maintain a second worker pool for rendering. The
+engine creates an owned pool rather than configuring the process-global pool,
+making its lifetime and worker count explicit. The pool is constructed once in
+application startup and shared through the job-system facade.
 
 By default, the pool uses the standard library's available-parallelism estimate
 minus one logical processor, with a minimum of one worker. This leaves capacity
@@ -29,8 +30,15 @@ host configures them explicitly.
 - parallel read-only `for_each` over a slice;
 - parallel disjoint `for_each_mut`;
 - parallel `map`, whose collected output follows input order;
+- owned-item `map_owned`, whose results follow input order;
 - indexed `for_each_chunk_mut` for independent chunk-sized data;
 - `join` for two independent computations.
+
+The current renderer is a direct consumer: it encodes independent render-pass
+callbacks and records per-pass D3D12 barriers and command lists on this pool.
+This reuses persistent workers instead of creating scoped OS threads for each
+render-graph submission. Small callback sets stay on the calling thread to
+avoid dispatch overhead.
 
 Work execution order and worker identity are unspecified. Jobs should be
 CPU-bound, reasonably sized, and independent where possible. Rust's `Send` and
@@ -39,7 +47,7 @@ into disjoint regions by the scheduler. Avoid blocking waits, long synchronous
 I/O, and locks with long critical sections inside worker operations, since they
 reduce throughput and can stall all work sharing the pool.
 
-## Nord task scheduler
+## Nord task scheduler (not started by the game yet)
 
 Rayon does not expose priority scheduling or task cancellation. `nord_scheduler`
 therefore owns a bounded, multi-priority waiting queue and dispatches up to a
@@ -91,10 +99,11 @@ if let Some(task_result) = handle.try_take()? {
 ```
 
 Task closures should be CPU-bound and coarse enough to amortize queue/handle
-overhead. Use `nord_jobs` for fine-grained slice parallelism and the scheduler
-for independently cancellable units such as chunk builds. The current platform
-event loop stays sequential because quit and lifecycle events are ordered
-control flow, not a parallel data workload.
+overhead. Use `nord_jobs` for fine-grained parallel work. Add the scheduler to
+the game bootstrap only when a real background workload needs independent
+cancellation or priority, such as cancellable asset preparation. The current
+platform event loop stays sequential because quit and lifecycle events are
+ordered control flow, not a parallel data workload.
 
 ## Sources
 

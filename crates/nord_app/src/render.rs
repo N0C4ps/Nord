@@ -1,4 +1,4 @@
-use crate::{ApplicationPlatform, ApplicationWindowHandle};
+use crate::{ApplicationJobSystem, ApplicationPlatform, ApplicationWindowHandle};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
@@ -502,8 +502,9 @@ impl ApplicationRenderer {
     pub fn submit_render_queue(
         &mut self,
         queue: &mut ApplicationRenderQueue,
+        jobs: &ApplicationJobSystem,
     ) -> Result<ApplicationCompiledRenderGraph, ApplicationRenderQueueError> {
-        let (compiled, buffers) = queue.encode_parallel()?;
+        let (compiled, buffers) = queue.encode_parallel(jobs)?;
         let resources = self.inner.create_transient_resources(&compiled).map_err(|error| {
             ApplicationRenderQueueError::TransientResources(ApplicationRenderError(error))
         })?;
@@ -514,18 +515,9 @@ impl ApplicationRenderer {
                 error,
             )));
         }
-        let mut recorded = match self.inner.record_graph_barriers_parallel(&compiled, &resources) {
-            Ok(recorded) => recorded,
-            Err(error) => {
-                let _ = self.inner.destroy_transient_resources(resources);
-                return Err(ApplicationRenderQueueError::TransientResources(
-                    ApplicationRenderError(error),
-                ));
-            }
-        };
-        let mut commands =
-            match self.inner.record_graph_commands_parallel(&compiled, &resources, &buffers) {
-                Ok(commands) => commands,
+        let mut recorded =
+            match self.inner.record_graph_barriers_parallel(&compiled, &resources, jobs) {
+                Ok(recorded) => recorded,
                 Err(error) => {
                     let _ = self.inner.destroy_transient_resources(resources);
                     return Err(ApplicationRenderQueueError::TransientResources(
@@ -533,6 +525,18 @@ impl ApplicationRenderer {
                     ));
                 }
             };
+        let mut commands = match self
+            .inner
+            .record_graph_commands_parallel(&compiled, &resources, &buffers, jobs)
+        {
+            Ok(commands) => commands,
+            Err(error) => {
+                let _ = self.inner.destroy_transient_resources(resources);
+                return Err(ApplicationRenderQueueError::TransientResources(
+                    ApplicationRenderError(error),
+                ));
+            }
+        };
         if let Err(error) = self.inner.begin_graph_submission() {
             let _ = self.inner.destroy_transient_resources(resources);
             return Err(ApplicationRenderQueueError::TransientResources(ApplicationRenderError(

@@ -13,12 +13,13 @@ use crate::camera::GameCameraController;
 use nord_app::{
     ApplicationBufferDesc, ApplicationBufferMemory, ApplicationBufferUsage, ApplicationClearColor,
     ApplicationColorAttachmentBinding, ApplicationDescriptorHandle, ApplicationDiagnosticError,
-    ApplicationErrorContext, ApplicationMat4 as Mat4, ApplicationPipelineDescriptorBinding,
-    ApplicationPlatform, ApplicationQuat as Quat, ApplicationRenderConfig, ApplicationRenderQueue,
-    ApplicationRenderTargetDesc, ApplicationRenderer, ApplicationResourceUsage,
-    ApplicationShaderBindingKind, ApplicationTextureFormat, ApplicationVec2 as Vec2,
-    ApplicationVec3 as Vec3, ApplicationVec4 as Vec4, ApplicationVertexBufferBinding,
-    ApplicationViewport, ApplicationWindowHandle,
+    ApplicationErrorContext, ApplicationJobSystem, ApplicationMat4 as Mat4,
+    ApplicationPipelineDescriptorBinding, ApplicationPlatform, ApplicationQuat as Quat,
+    ApplicationRenderConfig, ApplicationRenderQueue, ApplicationRenderTargetDesc,
+    ApplicationRenderer, ApplicationResourceUsage, ApplicationShaderBindingKind,
+    ApplicationTextureFormat, ApplicationVec2 as Vec2, ApplicationVec3 as Vec3,
+    ApplicationVec4 as Vec4, ApplicationVertexBufferBinding, ApplicationViewport,
+    ApplicationWindowHandle,
 };
 use nord_camera::PerspectiveCamera;
 use nord_mesh::{IndexedMesh, MeshVertex};
@@ -44,6 +45,7 @@ struct GameSurface {
 
 /// Game-owned policy that connects Nord's generic renderer to the app loop.
 pub(super) struct GameRenderer {
+    jobs: ApplicationJobSystem,
     renderer: Option<ApplicationRenderer>,
     surface: GameSurface,
     vertex_buffer: nord_app::ApplicationGpuResourceHandle,
@@ -100,6 +102,7 @@ impl GameRenderer {
         window: ApplicationWindowHandle,
         width: u32,
         height: u32,
+        jobs: ApplicationJobSystem,
     ) -> nord_app::ApplicationResult<Self> {
         let aspect_ratio = surface_aspect(width, height)?;
         let camera = GameCameraController::new(create_game_camera(aspect_ratio)?, window);
@@ -216,6 +219,7 @@ impl GameRenderer {
             "Occlusion path selected for this run"
         );
         Ok(Self {
+            jobs,
             renderer: Some(renderer),
             surface,
             vertex_buffer: mesh_gpu.vertex_buffer,
@@ -628,7 +632,7 @@ impl GameRenderer {
         let benchmark_frame = self.benchmark_pending;
         let benchmark_start = std::time::Instant::now();
         renderer
-            .submit_render_queue(&mut queue)
+            .submit_render_queue(&mut queue, &self.jobs)
             .map_err(|error| ApplicationDiagnosticError::msg(format!("{error:?}")))
             .context("submitting the game's PBR mesh render graph")?;
         if self.gpu_validation_pending {
