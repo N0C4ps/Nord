@@ -39,6 +39,9 @@ const RENDER_BENCHMARK_MEASURED_FRAMES: usize = 80;
 /// Surface-sized game output and its depth buffer.
 #[derive(Clone, Copy)]
 struct GameSurface {
+    scene_color: nord_app::ApplicationGpuResourceHandle,
+    scene_color_view: ApplicationDescriptorHandle,
+    scene_color_srv: ApplicationDescriptorHandle,
     color: nord_app::ApplicationGpuResourceHandle,
     color_view: ApplicationDescriptorHandle,
     depth: nord_app::ApplicationGpuResourceHandle,
@@ -439,18 +442,46 @@ impl GameRenderer {
                 Some(ApplicationTextureFormat::D32Float),
             )?)
             .map_err(ApplicationDiagnosticError::msg)
-            .context("creating the game's color and depth render targets")?;
-        let color = target.color.expect("color target was requested");
+            .context("creating the game's scene color and depth targets")?;
+        let scene_color = target.color.expect("scene color target was requested");
         let depth = target.depth.expect("depth target was requested");
-        let color_view = renderer
-            .create_render_target_view(color)
+        let scene_color_view = renderer
+            .create_render_target_view(scene_color)
             .map_err(ApplicationDiagnosticError::msg)
-            .context("creating the game's color attachment view")?;
+            .context("creating the game's scene color attachment view")?;
+        let scene_color_srv = renderer
+            .create_texture_srv(scene_color)
+            .map_err(ApplicationDiagnosticError::msg)
+            .context("creating the sampled scene color view for adaptive crosshair shading")?;
         let depth_view = renderer
             .create_depth_stencil_view(depth)
             .map_err(ApplicationDiagnosticError::msg)
             .context("creating the game's depth attachment view")?;
-        Ok(GameSurface { color, color_view, depth, depth_view, width, height })
+        let composite = renderer
+            .create_render_target(ApplicationRenderTargetDesc::new(
+                width,
+                height,
+                Some(ApplicationTextureFormat::Rgba8Unorm),
+                None,
+            )?)
+            .map_err(ApplicationDiagnosticError::msg)
+            .context("creating the composited game output target")?;
+        let color = composite.color.expect("composite color target was requested");
+        let color_view = renderer
+            .create_render_target_view(color)
+            .map_err(ApplicationDiagnosticError::msg)
+            .context("creating the composited output attachment view")?;
+        Ok(GameSurface {
+            scene_color,
+            scene_color_view,
+            scene_color_srv,
+            color,
+            color_view,
+            depth,
+            depth_view,
+            width,
+            height,
+        })
     }
 
     pub(super) fn render_frame(&mut self) -> nord_app::ApplicationResult<()> {
@@ -535,6 +566,9 @@ impl GameRenderer {
         let crosshair_pipeline = self.crosshair.pipeline().clone();
         let crosshair_vertex_shader = self.crosshair.vertex_shader().clone();
         let crosshair_pixel_shader = self.crosshair.pixel_shader().clone();
+        let crosshair_blit_pipeline = self.crosshair.blit_pipeline().clone();
+        let crosshair_blit_vertex_shader = self.crosshair.blit_vertex_shader().clone();
+        let crosshair_blit_pixel_shader = self.crosshair.blit_pixel_shader().clone();
         let sky_buffer = self.sky.vertex_buffer();
         let sky_pipeline = self.sky.pipeline().clone();
         let sky_vertex_shader = self.sky.vertex_shader().clone();
@@ -641,7 +675,10 @@ impl GameRenderer {
         queue
             .enqueue(
                 nord_app::ApplicationRenderPassDesc::new("Nord metallic-roughness PBR mesh")
-                    .use_resource(surface.color, ApplicationResourceUsage::ColorAttachmentWrite)
+                    .use_resource(
+                        surface.scene_color,
+                        ApplicationResourceUsage::ColorAttachmentWrite,
+                    )
                     .use_resource(surface.depth, ApplicationResourceUsage::DepthAttachmentWrite)
                     .use_resource(vertex_buffer, ApplicationResourceUsage::VertexBufferRead)
                     .use_resource(index_buffer, ApplicationResourceUsage::IndexBufferRead)
@@ -656,13 +693,12 @@ impl GameRenderer {
                     .use_resource(material_textures[1], ApplicationResourceUsage::SampledRead)
                     .use_resource(material_textures[2], ApplicationResourceUsage::SampledRead)
                     .use_resource(shadow_map.color, ApplicationResourceUsage::SampledRead)
-                    .use_resource(crosshair_buffer, ApplicationResourceUsage::VertexBufferRead)
                     .use_resource(sky_buffer, ApplicationResourceUsage::VertexBufferRead),
                 move |encoder| {
                     encoder.begin_graphics_pass_with_attachments(
                         &[ApplicationColorAttachmentBinding {
-                            resource: surface.color,
-                            view: surface.color_view,
+                            resource: surface.scene_color,
+                            view: surface.scene_color_view,
                             clear_color: CLEAR_COLOR,
                         }],
                         Some((surface.depth, surface.depth_view)),
@@ -731,11 +767,57 @@ impl GameRenderer {
                         maximum_instances,
                         index_count,
                     )?;
+                    encoder.end_graphics_pass()?;
+                    Ok(())
+                },
+            )
+            .map_err(|error| ApplicationDiagnosticError::msg(format!("{error:?}")))
+            .context("encoding the game's metallic-roughness PBR mesh pass")?;
+        let scene_color_binding = ApplicationPipelineDescriptorBinding {
+            kind: ApplicationShaderBindingKind::SampledResource,
+            register: 0,
+            space: 0,
+            descriptor: surface.scene_color_srv,
+        };
+        queue
+            .enqueue(
+                nord_app::ApplicationRenderPassDesc::new(
+                    "Nord scene composition and adaptive crosshair",
+                )
+                .use_resource(surface.scene_color, ApplicationResourceUsage::SampledRead)
+                .use_resource(surface.color, ApplicationResourceUsage::ColorAttachmentWrite)
+                .use_resource(crosshair_buffer, ApplicationResourceUsage::VertexBufferRead),
+                move |encoder| {
+                    encoder.begin_graphics_pass_with_attachments(
+                        &[ApplicationColorAttachmentBinding {
+                            resource: surface.color,
+                            view: surface.color_view,
+                            clear_color: CLEAR_COLOR,
+                        }],
+                        None,
+                        1.0,
+                        Some(ApplicationViewport::new(0.0, 0.0, viewport_width, viewport_height)),
+                        None,
+                    )?;
+                    encoder.draw(
+                        &crosshair_blit_pipeline,
+                        &crosshair_blit_vertex_shader,
+                        &crosshair_blit_pixel_shader,
+                        &[scene_color_binding],
+                        &[],
+                        None,
+                        ApplicationDrawCall::Vertices {
+                            vertex_count: 3,
+                            instance_count: 1,
+                            first_vertex: 0,
+                            first_instance: 0,
+                        },
+                    )?;
                     encoder.draw(
                         &crosshair_pipeline,
                         &crosshair_vertex_shader,
                         &crosshair_pixel_shader,
-                        &[],
+                        &[scene_color_binding],
                         &[ApplicationVertexBufferBinding {
                             slot: 0,
                             buffer: crosshair_buffer,
@@ -756,7 +838,7 @@ impl GameRenderer {
                 },
             )
             .map_err(|error| ApplicationDiagnosticError::msg(format!("{error:?}")))
-            .context("encoding the game's metallic-roughness PBR mesh pass")?;
+            .context("encoding the game's sampled-color crosshair composite")?;
         let benchmark_frame = self.benchmark_pending;
         let benchmark_start = std::time::Instant::now();
         renderer
@@ -877,9 +959,13 @@ impl GameRenderer {
             occlusion.shutdown(renderer)?;
         }
         renderer
+            .destroy_resource(self.surface.scene_color)
+            .map_err(ApplicationDiagnosticError::msg)
+            .context("retiring the previous sampled scene color target")?;
+        renderer
             .destroy_resource(self.surface.color)
             .map_err(ApplicationDiagnosticError::msg)
-            .context("retiring the previous game color target")?;
+            .context("retiring the previous composited output target")?;
         renderer
             .destroy_resource(self.surface.depth)
             .map_err(ApplicationDiagnosticError::msg)
@@ -919,6 +1005,7 @@ impl GameRenderer {
         }
         self.gpu_culling.destroy(&mut renderer)?;
         for resource in [
+            self.surface.scene_color,
             self.surface.color,
             self.surface.depth,
             self.vertex_buffer,

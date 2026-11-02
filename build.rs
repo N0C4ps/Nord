@@ -144,9 +144,12 @@ fn compile_game_shaders() {
         },
     );
     let crosshair_shader = manifest_dir.join(CROSSHAIR_SHADER_SOURCE);
-    for (entry, artifact_name, profile, stage) in
-        [("VSMain", "nord_crosshair", "vs_6_0", "vs"), ("PSMain", "nord_crosshair", "ps_6_0", "ps")]
-    {
+    for (entry, artifact_name, profile, stage) in [
+        ("VSMain", "nord_crosshair", "vs_6_0", "vs"),
+        ("PSCrosshair", "nord_crosshair", "ps_6_0", "ps"),
+        ("VSBlit", "nord_crosshair_blit", "vs_6_0", "vs"),
+        ("PSBlit", "nord_crosshair_blit", "ps_6_0", "ps"),
+    ] {
         compile_stage(
             &dxc,
             &crosshair_shader,
