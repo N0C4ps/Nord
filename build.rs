@@ -8,6 +8,7 @@ const SHADOW_SHADER_SOURCE: &str = "assets/shaders/nord_directional_shadow.hlsl"
 const GPU_CULL_SHADER_SOURCE: &str = "assets/shaders/nord_gpu_culling.hlsl";
 const CAMERA_DEPTH_SHADER_SOURCE: &str = "assets/shaders/nord_camera_depth.hlsl";
 const HIZ_SHADER_SOURCE: &str = "assets/shaders/nord_hiz.hlsl";
+const CROSSHAIR_SHADER_SOURCE: &str = "assets/shaders/nord_crosshair.hlsl";
 
 fn main() {
     println!("cargo:rerun-if-changed=nord.exe.manifest");
@@ -16,6 +17,7 @@ fn main() {
     println!("cargo:rerun-if-changed={GPU_CULL_SHADER_SOURCE}");
     println!("cargo:rerun-if-changed={CAMERA_DEPTH_SHADER_SOURCE}");
     println!("cargo:rerun-if-changed={HIZ_SHADER_SOURCE}");
+    println!("cargo:rerun-if-changed={CROSSHAIR_SHADER_SOURCE}");
     for variable in ["NORD_DXC_PATH", "DXC_PATH", "ProgramFiles(x86)"] {
         println!("cargo:rerun-if-env-changed={variable}");
     }
@@ -139,6 +141,18 @@ fn compile_game_shaders() {
             stage: "cs",
         },
     );
+    let crosshair_shader = manifest_dir.join(CROSSHAIR_SHADER_SOURCE);
+    for (entry, artifact_name, profile, stage) in
+        [("VSMain", "nord_crosshair", "vs_6_0", "vs"), ("PSMain", "nord_crosshair", "ps_6_0", "ps")]
+    {
+        compile_stage(
+            &dxc,
+            &crosshair_shader,
+            shader_directory,
+            &output_directory,
+            ShaderStageSpec { artifact_name, entry, profile, stage },
+        );
+    }
 }
 
 #[derive(Clone, Copy)]

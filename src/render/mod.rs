@@ -1,9 +1,11 @@
+mod crosshair;
 mod gpu_driven;
 mod material;
 mod occlusion;
 mod shadows;
 mod visibility;
 
+use self::crosshair::Crosshair;
 use self::gpu_driven::GpuDrivenCulling;
 use self::material::{PbrMaterial, PbrMaterialDesc};
 use self::occlusion::HiZOcclusion;
@@ -13,7 +15,7 @@ use crate::camera::GameCameraController;
 use nord_app::{
     ApplicationBufferDesc, ApplicationBufferMemory, ApplicationBufferUsage, ApplicationClearColor,
     ApplicationColorAttachmentBinding, ApplicationDescriptorHandle, ApplicationDiagnosticError,
-    ApplicationErrorContext, ApplicationJobSystem, ApplicationMat4 as Mat4,
+    ApplicationDrawCall, ApplicationErrorContext, ApplicationJobSystem, ApplicationMat4 as Mat4,
     ApplicationPipelineDescriptorBinding, ApplicationPlatform, ApplicationQuat as Quat,
     ApplicationRenderConfig, ApplicationRenderQueue, ApplicationRenderTargetDesc,
     ApplicationRenderer, ApplicationResourceUsage, ApplicationShaderBindingKind,
@@ -91,6 +93,7 @@ pub(super) struct GameRenderer {
     camera_binding: ApplicationPipelineDescriptorBinding,
     camera: GameCameraController,
     model: Mat4,
+    crosshair: Crosshair,
     material: PbrMaterial,
     shadows: DirectionalShadowMap,
     shadow_visibility_mask: Vec<u8>,
@@ -143,6 +146,7 @@ impl GameRenderer {
             &mut renderer,
             PbrMaterialDesc::new([0.74, 0.43, 0.19], 0.92, 0.82, 0.78, 1.0)?,
         )?;
+        let crosshair = Crosshair::create(&mut renderer, width, height)?;
         let shadows = DirectionalShadowMap::create(&mut renderer)?;
         let mesh = make_test_cube()?;
         let model = test_cube_transform()?;
@@ -308,6 +312,7 @@ impl GameRenderer {
             camera_binding,
             camera,
             model,
+            crosshair,
             material,
             shadows,
             shadow_visibility_mask,
@@ -521,6 +526,10 @@ impl GameRenderer {
         let shadow_vertex_shader = self.shadows.vertex_shader().clone();
         let shadow_pixel_shader = self.shadows.pixel_shader().clone();
         let shadow_binding = self.shadows.sampled_binding();
+        let crosshair_buffer = self.crosshair.vertex_buffer();
+        let crosshair_pipeline = self.crosshair.pipeline().clone();
+        let crosshair_vertex_shader = self.crosshair.vertex_shader().clone();
+        let crosshair_pixel_shader = self.crosshair.pixel_shader().clone();
         let index_count = self.index_count;
         let pipeline = self.material.pipeline().clone();
         let vertex_shader = self.material.vertex_shader().clone();
@@ -637,7 +646,8 @@ impl GameRenderer {
                     .use_resource(material_textures[0], ApplicationResourceUsage::SampledRead)
                     .use_resource(material_textures[1], ApplicationResourceUsage::SampledRead)
                     .use_resource(material_textures[2], ApplicationResourceUsage::SampledRead)
-                    .use_resource(shadow_map.color, ApplicationResourceUsage::SampledRead),
+                    .use_resource(shadow_map.color, ApplicationResourceUsage::SampledRead)
+                    .use_resource(crosshair_buffer, ApplicationResourceUsage::VertexBufferRead),
                 move |encoder| {
                     encoder.begin_graphics_pass_with_attachments(
                         &[ApplicationColorAttachmentBinding {
@@ -690,6 +700,26 @@ impl GameRenderer {
                         1,
                         maximum_instances,
                         index_count,
+                    )?;
+                    encoder.draw(
+                        &crosshair_pipeline,
+                        &crosshair_vertex_shader,
+                        &crosshair_pixel_shader,
+                        &[],
+                        &[ApplicationVertexBufferBinding {
+                            slot: 0,
+                            buffer: crosshair_buffer,
+                            offset: 0,
+                            size: 24 * 8,
+                            stride: 8,
+                        }],
+                        None,
+                        ApplicationDrawCall::Vertices {
+                            vertex_count: 24,
+                            instance_count: 1,
+                            first_vertex: 0,
+                            first_instance: 0,
+                        },
                     )?;
                     encoder.end_graphics_pass()?;
                     Ok(())
@@ -829,6 +859,7 @@ impl GameRenderer {
             .map_err(ApplicationDiagnosticError::msg)
             .context("resizing the Nord render surface")?;
         self.surface = Self::create_surface(renderer, width, height)?;
+        self.crosshair.resize(renderer, width, height)?;
         if occlusion_culling_enabled() {
             self.occlusion = Some(HiZOcclusion::create(renderer, width, height)?);
         }
