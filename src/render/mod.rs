@@ -3,6 +3,7 @@ mod gpu_driven;
 mod material;
 mod occlusion;
 mod shadows;
+mod sky;
 mod visibility;
 
 use self::crosshair::Crosshair;
@@ -10,6 +11,7 @@ use self::gpu_driven::GpuDrivenCulling;
 use self::material::{PbrMaterial, PbrMaterialDesc};
 use self::occlusion::HiZOcclusion;
 use self::shadows::DirectionalShadowMap;
+use self::sky::Sky;
 use self::visibility::{CullingMetrics, DrawRange, GameScene};
 use crate::camera::GameCameraController;
 use nord_app::{
@@ -94,6 +96,7 @@ pub(super) struct GameRenderer {
     camera: GameCameraController,
     model: Mat4,
     crosshair: Crosshair,
+    sky: Sky,
     material: PbrMaterial,
     shadows: DirectionalShadowMap,
     shadow_visibility_mask: Vec<u8>,
@@ -147,6 +150,7 @@ impl GameRenderer {
             PbrMaterialDesc::new([0.74, 0.43, 0.19], 0.92, 0.82, 0.78, 1.0)?,
         )?;
         let crosshair = Crosshair::create(&mut renderer, width, height)?;
+        let sky = Sky::create(&mut renderer)?;
         let shadows = DirectionalShadowMap::create(&mut renderer)?;
         let mesh = make_test_cube()?;
         let model = test_cube_transform()?;
@@ -313,6 +317,7 @@ impl GameRenderer {
             camera,
             model,
             crosshair,
+            sky,
             material,
             shadows,
             shadow_visibility_mask,
@@ -530,6 +535,10 @@ impl GameRenderer {
         let crosshair_pipeline = self.crosshair.pipeline().clone();
         let crosshair_vertex_shader = self.crosshair.vertex_shader().clone();
         let crosshair_pixel_shader = self.crosshair.pixel_shader().clone();
+        let sky_buffer = self.sky.vertex_buffer();
+        let sky_pipeline = self.sky.pipeline().clone();
+        let sky_vertex_shader = self.sky.vertex_shader().clone();
+        let sky_pixel_shader = self.sky.pixel_shader().clone();
         let index_count = self.index_count;
         let pipeline = self.material.pipeline().clone();
         let vertex_shader = self.material.vertex_shader().clone();
@@ -647,7 +656,8 @@ impl GameRenderer {
                     .use_resource(material_textures[1], ApplicationResourceUsage::SampledRead)
                     .use_resource(material_textures[2], ApplicationResourceUsage::SampledRead)
                     .use_resource(shadow_map.color, ApplicationResourceUsage::SampledRead)
-                    .use_resource(crosshair_buffer, ApplicationResourceUsage::VertexBufferRead),
+                    .use_resource(crosshair_buffer, ApplicationResourceUsage::VertexBufferRead)
+                    .use_resource(sky_buffer, ApplicationResourceUsage::VertexBufferRead),
                 move |encoder| {
                     encoder.begin_graphics_pass_with_attachments(
                         &[ApplicationColorAttachmentBinding {
@@ -659,6 +669,26 @@ impl GameRenderer {
                         1.0,
                         Some(ApplicationViewport::new(0.0, 0.0, viewport_width, viewport_height)),
                         None,
+                    )?;
+                    encoder.draw(
+                        &sky_pipeline,
+                        &sky_vertex_shader,
+                        &sky_pixel_shader,
+                        &[],
+                        &[ApplicationVertexBufferBinding {
+                            slot: 0,
+                            buffer: sky_buffer,
+                            offset: 0,
+                            size: 120,
+                            stride: 20,
+                        }],
+                        None,
+                        ApplicationDrawCall::Vertices {
+                            vertex_count: 6,
+                            instance_count: 1,
+                            first_vertex: 0,
+                            first_instance: 0,
+                        },
                     )?;
                     encoder.draw_indexed_indirect(
                         &pipeline,
