@@ -14,8 +14,15 @@ use std::time::Duration;
 const LOGGER_FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub fn run() -> Result<(), ApplicationError> {
-    let dependencies = AppDependencies::build()
-        .map_err(|source| ApplicationError::unreported("bootstrap", source))?;
+    let dependencies = AppDependencies::build().map_err(|failure| {
+        let reported = failure.was_reported();
+        let source = failure.into_source();
+        if reported {
+            ApplicationError::reported("bootstrap", source)
+        } else {
+            ApplicationError::unreported("bootstrap", source)
+        }
+    })?;
     Application::new(dependencies).run()
 }
 

@@ -29,10 +29,55 @@ pub(super) struct AppDependencies {
 }
 
 impl AppDependencies {
-    pub(super) fn build() -> ApplicationResult<Self> {
-        let mut builder = ApplicationServicesBuilder::new();
+    pub(super) fn build() -> Result<Self, BootstrapError> {
+        // Platform paths are needed to locate the log directory. Start the
+        // structured logger before loading user configuration or creating a
+        // window so those failures are captured by the normal log pipeline.
         let platform = ApplicationPlatform::initialize("nord")
-            .context("initializing native platform capabilities")?;
+            .context("initializing native platform capabilities")
+            .map_err(BootstrapError::unreported)?;
+        let log_directory = platform.data_dir().join("logs");
+        let telemetry = ApplicationOpenTelemetryConfig::from_environment()
+            .map_err(ApplicationDiagnosticError::msg)
+            .context("reading OpenTelemetry configuration")
+            .map_err(BootstrapError::unreported)?;
+        let logger = Arc::new(
+            ApplicationLogger::initialize(
+                ApplicationLoggerConfig::new()
+                    .with_json_file(ApplicationJsonFileConfig::daily(&log_directory, "nord"))
+                    .with_open_telemetry(telemetry),
+            )
+            .context("initializing the application logger")
+            .map_err(BootstrapError::unreported)?,
+        );
+
+        match Self::build_with_logger(platform, Arc::clone(&logger), log_directory) {
+            Ok(dependencies) => Ok(dependencies),
+            Err(error) => {
+                nord_app::error!(
+                    name: "application_bootstrap_failed",
+                    target: "nord::app",
+                    %error,
+                    cause = ?error,
+                    "Nord could not complete application bootstrap"
+                );
+                Err(BootstrapError::reported(error))
+            }
+        }
+    }
+
+    fn build_with_logger(
+        platform: ApplicationPlatform,
+        logger: Arc<ApplicationLogger>,
+        log_directory: PathBuf,
+    ) -> ApplicationResult<Self> {
+        let mut builder = ApplicationServicesBuilder::new();
+        let crash_reporter = ApplicationCrashReporter::initialize(
+            ApplicationCrashReporterConfig::new(log_directory.join("crashes.jsonl"))
+                .with_application_identity("Nord", env!("CARGO_PKG_VERSION")),
+            logger.panic_flush_callback(),
+        )
+        .context("initializing application crash diagnostics")?;
         let loader = ApplicationConfigLoader::new(GameConfig::default())
             .with_environment_prefix("NORD")
             .validate_with(GameConfig::validate);
@@ -46,24 +91,6 @@ impl AppDependencies {
         let events = Arc::new(ApplicationEventSystem::new());
         let inputs = Arc::new(ApplicationInputSystem::new());
         let memory = ApplicationMemoryManager::new(None);
-        let log_directory = platform.data_dir().join("logs");
-        let telemetry = ApplicationOpenTelemetryConfig::from_environment()
-            .map_err(ApplicationDiagnosticError::msg)
-            .context("reading OpenTelemetry configuration")?;
-        let logger = Arc::new(
-            ApplicationLogger::initialize(
-                ApplicationLoggerConfig::new()
-                    .with_json_file(ApplicationJsonFileConfig::daily(&log_directory, "nord"))
-                    .with_open_telemetry(telemetry),
-            )
-            .context("initializing the application logger")?,
-        );
-        let crash_reporter = ApplicationCrashReporter::initialize(
-            ApplicationCrashReporterConfig::new(log_directory.join("crashes.jsonl"))
-                .with_application_identity("Nord", env!("CARGO_PKG_VERSION")),
-            logger.panic_flush_callback(),
-        )
-        .context("initializing application crash diagnostics")?;
         let main_window = create_main_window(&platform, &config)?;
         builder.register(config).context("registering game configuration")?;
         let thread_pool_config = match configured_worker_threads {
@@ -150,6 +177,48 @@ impl AppDependencies {
                 .get::<ApplicationTaskScheduler>()
                 .context("resolving the task scheduler from application services")?,
         })
+    }
+}
+
+/// Whether a bootstrap failure has already been written to the structured log.
+pub(super) struct BootstrapError {
+    source: nord_app::ApplicationDiagnosticError,
+    reported: bool,
+}
+
+impl BootstrapError {
+    fn unreported(source: nord_app::ApplicationDiagnosticError) -> Self {
+        Self { source, reported: false }
+    }
+
+    fn reported(source: nord_app::ApplicationDiagnosticError) -> Self {
+        Self { source, reported: true }
+    }
+
+    pub(super) const fn was_reported(&self) -> bool {
+        self.reported
+    }
+
+    pub(super) fn into_source(self) -> nord_app::ApplicationDiagnosticError {
+        self.source
+    }
+}
+
+impl std::fmt::Display for BootstrapError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.source, formatter)
+    }
+}
+
+impl std::fmt::Debug for BootstrapError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&self.source, formatter)
+    }
+}
+
+impl std::error::Error for BootstrapError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.source.as_ref())
     }
 }
 
