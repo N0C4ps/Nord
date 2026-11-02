@@ -1,0 +1,70 @@
+name: Publish game release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Validate and publish Windows release
+    runs-on: windows-latest
+    steps:
+      - name: Check out source and LFS assets
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          lfs: true
+
+      - name: Verify tag and package version
+        shell: pwsh
+        run: |
+          $tagVersion = $env:GITHUB_REF_NAME -replace '^v', ''
+          $manifest = Get-Content Cargo.toml -Raw
+          $package = [regex]::Match($manifest, '(?ms)^\[package\]\s*(.*?)(?=^\[|\z)').Groups[1].Value
+          $manifestVersion = [regex]::Match($package, '(?m)^version\s*=\s*"([^"]+)"').Groups[1].Value
+          if ([string]::IsNullOrWhiteSpace($manifestVersion) -or $tagVersion -ne $manifestVersion) {
+            throw "Tag version '$tagVersion' does not match Cargo.toml version '$manifestVersion'."
+          }
+
+      - name: Validate architecture, formatting, lint, and workspace
+        run: ./scripts/validate.ps1
+
+      - name: Run workspace tests
+        run: cargo test --workspace --all-targets --locked
+
+      - name: Build debug
+        run: ./scripts/build_debug.ps1
+
+      - name: Build release-fast
+        run: ./scripts/build_fast.ps1
+
+      - name: Build release
+        run: ./scripts/build_release.ps1
+
+      - name: Package executable, checksum, and release notes
+        shell: pwsh
+        run: ./scripts/package_release.ps1 -Version ($env:GITHUB_REF_NAME -replace '^v', '') -OutputDirectory 'target/release-package'
+
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $version = $tag -replace '^v', ''
+          $package = 'target/release-package'
+          $arguments = @(
+            'release', 'create', $tag,
+            (Join-Path $package 'Nord.exe'),
+            (Join-Path $package 'Nord.exe.sha256'),
+            '--title', "Builders Game $version",
+            '--notes-file', (Join-Path $package 'RELEASE_NOTES.md'),
+            '--verify-tag'
+          )
+          if ($version -match '-(alpha|beta|rc)(\.|$)') {
+            $arguments += '--prerelease'
+          }
+          gh @arguments

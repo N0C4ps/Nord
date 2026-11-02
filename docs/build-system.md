@@ -34,6 +34,7 @@ The release profile favors optimization quality and may compile/link more slowly
 | `check_architecture.ps1` | Ensure the game source does not depend directly on `nord_dependency`. |
 | `validate.ps1` | Run architecture guard, format check, Clippy, and workspace check in sequence. |
 | `build_timed.ps1` | Build with Cargo timing reports; accepts `-Release` or `-Fast`. |
+| `package_release.ps1` | Package the Windows executable, checksum, and curated release notes after a release build. |
 | `clean.ps1` | Remove generated Cargo outputs from `target/`. |
 
 Examples:

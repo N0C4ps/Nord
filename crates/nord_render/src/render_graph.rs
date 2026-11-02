@@ -251,6 +251,9 @@ struct PassHistory {
 
 type RenderPassCallback<E> =
     Box<dyn FnOnce(&mut RenderCommandEncoder) -> Result<(), E> + Send + 'static>;
+type RenderPassEncodeResult<E> = Result<(RenderPassId, RenderCommandBuffer), RenderQueueError<E>>;
+type RenderPassWorkItem<E> =
+    (Option<(RenderPassId, RenderPassCallback<E>)>, Option<RenderPassEncodeResult<E>>);
 
 /// One vertex stream bound to an input-assembler slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1288,10 +1291,7 @@ impl<E> RenderQueue<E> {
             .collect::<Result<Vec<_>, _>>()?;
         let mut work =
             callbacks.into_iter().map(|callback| (Some(callback), None)).collect::<Vec<_>>();
-        let encode = |(task, result): &mut (
-            Option<(RenderPassId, RenderPassCallback<E>)>,
-            Option<Result<(RenderPassId, RenderCommandBuffer), RenderQueueError<E>>>,
-        )| {
+        let encode = |(task, result): &mut RenderPassWorkItem<E>| {
             let Some((pass, callback)) = task.take() else {
                 *result = Some(Err(RenderQueueError::EncodingWorkerPanicked));
                 return;

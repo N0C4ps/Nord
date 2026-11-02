@@ -120,16 +120,24 @@ impl GameCameraController {
             .unwrap_or(-Vec3::Z);
         let right = forward.cross(Vec3::Y).try_normalize().unwrap_or(Vec3::X);
 
-        if inputs.is_key_pressed(self.window, ApplicationKeyCode::Letter('W')) {
+        if inputs.is_key_pressed(self.window, ApplicationKeyCode::Letter('W'))
+            || inputs.is_key_pressed(self.window, ApplicationKeyCode::ArrowUp)
+        {
             movement += forward;
         }
-        if inputs.is_key_pressed(self.window, ApplicationKeyCode::Letter('S')) {
+        if inputs.is_key_pressed(self.window, ApplicationKeyCode::Letter('S'))
+            || inputs.is_key_pressed(self.window, ApplicationKeyCode::ArrowDown)
+        {
             movement -= forward;
         }
-        if inputs.is_key_pressed(self.window, ApplicationKeyCode::Letter('D')) {
+        if inputs.is_key_pressed(self.window, ApplicationKeyCode::Letter('D'))
+            || inputs.is_key_pressed(self.window, ApplicationKeyCode::ArrowRight)
+        {
             movement += right;
         }
-        if inputs.is_key_pressed(self.window, ApplicationKeyCode::Letter('A')) {
+        if inputs.is_key_pressed(self.window, ApplicationKeyCode::Letter('A'))
+            || inputs.is_key_pressed(self.window, ApplicationKeyCode::ArrowLeft)
+        {
             movement -= right;
         }
         if inputs.is_key_pressed(self.window, ApplicationKeyCode::Letter('E')) {
@@ -198,8 +206,8 @@ fn mouse_angle_delta(delta_pixels: f64) -> Option<f32> {
 mod tests {
     use super::{GameCameraController, GameCursorAction, mouse_angle_delta};
     use nord_app::{
-        ApplicationInputEvent, ApplicationKeyCode, ApplicationModifiers, ApplicationPlatform,
-        ApplicationPointerButton, ApplicationVec3 as Vec3,
+        ApplicationInputEvent, ApplicationInputSystem, ApplicationKeyCode, ApplicationModifiers,
+        ApplicationPlatform, ApplicationPointerButton, ApplicationVec3 as Vec3,
     };
     use nord_camera::PerspectiveCamera;
 
@@ -307,5 +315,29 @@ mod tests {
     fn mouse_angle_conversion_rejects_non_finite_values() {
         assert_eq!(mouse_angle_delta(f64::NAN), None);
         assert!(mouse_angle_delta(100.0).is_some_and(|delta| (delta - 0.3).abs() < 1.0e-6));
+    }
+
+    #[test]
+    fn arrow_keys_move_the_camera_forward_and_sideways() {
+        let platform = ApplicationPlatform::initialize("nord-camera-tests").unwrap();
+        let window = platform.event_emitter().allocate_window_handle().unwrap();
+        let inputs = ApplicationInputSystem::new();
+        let mut controller = GameCameraController::new(test_camera(), window);
+        let initial_position = controller.camera.position();
+
+        for key in [ApplicationKeyCode::ArrowUp, ApplicationKeyCode::ArrowRight] {
+            let _ = inputs.ingest(&ApplicationInputEvent::Key {
+                window,
+                key,
+                pressed: true,
+                repeat: false,
+                modifiers: ApplicationModifiers::EMPTY,
+            });
+        }
+
+        controller.advance_fixed_step(&inputs, std::time::Duration::from_secs(1)).unwrap();
+        let moved_position = controller.camera.position();
+        assert!(moved_position.x > initial_position.x);
+        assert!(moved_position.z < initial_position.z);
     }
 }

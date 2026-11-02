@@ -9,7 +9,7 @@ use nord_app::{
     ApplicationThreadPoolConfig, ApplicationWindowConfig,
 };
 use std::num::NonZeroUsize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub(super) struct AppDependencies {
@@ -48,7 +48,7 @@ impl AppDependencies {
             .map_err(BootstrapError::unreported)?,
         );
 
-        match Self::build_with_logger(platform, Arc::clone(&logger), log_directory) {
+        match Self::build_with_logger(platform, Arc::clone(&logger), &log_directory) {
             Ok(dependencies) => Ok(dependencies),
             Err(error) => {
                 nord_app::error!(
@@ -66,7 +66,7 @@ impl AppDependencies {
     fn build_with_logger(
         platform: ApplicationPlatform,
         logger: Arc<ApplicationLogger>,
-        log_directory: PathBuf,
+        log_directory: &Path,
     ) -> ApplicationResult<Self> {
         let mut builder = ApplicationServicesBuilder::new();
         let crash_reporter = ApplicationCrashReporter::initialize(

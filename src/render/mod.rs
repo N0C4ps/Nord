@@ -163,7 +163,7 @@ impl GameRenderer {
             vector_capacity_bytes::<u128>(96)?,
         ]
         .into_iter()
-        .try_fold(0_u64, |total, bytes| total.checked_add(bytes))
+        .try_fold(0_u64, u64::checked_add)
         .ok_or_else(|| {
             ApplicationDiagnosticError::msg("game renderer CPU memory estimate overflowed")
         })?;
@@ -227,7 +227,7 @@ impl GameRenderer {
             vector_capacity_bytes::<u128>(benchmark_samples.capacity())?,
         ]
         .into_iter()
-        .try_fold(0_u64, |total, bytes| total.checked_add(bytes))
+        .try_fold(0_u64, u64::checked_add)
         .ok_or_else(|| {
             ApplicationDiagnosticError::msg("game renderer CPU memory accounting overflowed")
         })?;

@@ -844,7 +844,7 @@ dependencies = [
 
 [[package]]
 name = "nord"
-version = "0.1.0"
+version = "1.0.0-alpha.1"
 dependencies = [
  "ctrlc",
  "nord_app",
