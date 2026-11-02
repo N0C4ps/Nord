@@ -11,6 +11,10 @@ driver. The current renderer uses Direct3D 12, so the machine must provide a
 supported Windows version, a D3D12-capable GPU, and its driver. Those are system
 requirements, not files to copy beside the game.
 
+The game executable uses the Windows GUI subsystem, so launching it normally
+opens the game window without a separate console window. Structured logs remain
+available under the user's local application data directory.
+
 At startup, Nord uses built-in configuration defaults when no optional config
 file is present. Logs and crash reports are created under the user's local
 application data directory when needed; they are generated runtime output and
