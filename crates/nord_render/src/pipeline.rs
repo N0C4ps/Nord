@@ -54,6 +54,9 @@ pub enum BlendMode {
     Alpha,
     /// Multiply white source pixels by one minus the destination color.
     InvertDestinationColor,
+    /// Apply a contrast-stretched inverse to white source pixels:
+    /// `clamp(1 - 2 * destination, 0, 1)` per color channel.
+    HighContrastInvert,
 }
 
 /// Input-assembler attribute format.
