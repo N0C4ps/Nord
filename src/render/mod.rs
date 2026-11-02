@@ -717,6 +717,12 @@ impl GameRenderer {
                 .context("suspending the Nord render surface");
         }
         if width == self.surface.width && height == self.surface.height {
+            if renderer.surface_suspended() {
+                renderer
+                    .resize(width, height)
+                    .map_err(ApplicationDiagnosticError::msg)
+                    .context("resuming the Nord render surface")?;
+            }
             return Ok(());
         }
         let aspect_ratio = surface_aspect(width, height)?;
