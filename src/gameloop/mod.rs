@@ -14,6 +14,7 @@ pub(super) struct GameLoop {
     frame_scratch: nord_app::ApplicationScratchArena,
     clock: ApplicationFrameClock,
     fixed_steps: ApplicationFixedStepAccumulator,
+    fixed_step: Duration,
     fps: ApplicationFpsCounter,
 }
 
@@ -35,6 +36,7 @@ impl GameLoop {
         )
         .map_err(nord_app::ApplicationDiagnosticError::msg)
         .context("building configured fixed-step simulation")?;
+        let fixed_step = fixed_step_config.step();
         Ok(Self {
             iterations: 0,
             scheduled_steps: 0,
@@ -42,20 +44,28 @@ impl GameLoop {
             frame_scratch: memory.create_scratch_arena(None),
             clock,
             fixed_steps: ApplicationFixedStepAccumulator::new(fixed_step_config),
+            fixed_step,
             fps: ApplicationFpsCounter::default(),
         })
     }
 
-    pub(super) fn advance(
+    pub(super) fn advance<FixedUpdate>(
         &mut self,
         platform_event_count: usize,
-    ) -> nord_app::ApplicationResult<()> {
+        mut fixed_update: FixedUpdate,
+    ) -> nord_app::ApplicationResult<()>
+    where
+        FixedUpdate: FnMut(Duration) -> nord_app::ApplicationResult<()>,
+    {
         nord_app::ensure!(self.iterations < u64::MAX, "game loop iteration counter exhausted");
         let next_iteration = self.iterations + 1;
         self.frame_scratch.reset();
         let time = self.clock.tick();
         let fixed_plan = self.fixed_steps.advance(time.delta);
         let _fps_sample = self.fps.record_frame(time.raw_delta);
+        for _ in 0..fixed_plan.steps {
+            fixed_update(self.fixed_step).context("running a fixed-step game system")?;
+        }
 
         let frame_context_bytes = u64::try_from(std::mem::size_of::<FrameContext>())?;
         let _frame_reservation = self
@@ -93,9 +103,6 @@ impl GameLoop {
                 self.scheduled_steps.saturating_add(u64::from(frame.fixed_steps));
         }
 
-        // World simulation, physics, and rendering will be integrated here as
-        // their game-owned systems are introduced. The frame context is the
-        // short-lived input those systems will share during this iteration.
         self.frame_scratch.reset();
         Ok(())
     }

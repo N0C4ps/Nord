@@ -1,11 +1,12 @@
 //! Game-owned first-person controls connecting input to the camera.
 
 use nord_app::{
-    ApplicationDiagnosticError, ApplicationErrorContext, ApplicationInputEvent, ApplicationKeyCode,
-    ApplicationPointerButton, ApplicationVec3 as Vec3, ApplicationWindowHandle,
-    application_wrap_angle_pi as wrap_angle_pi,
+    ApplicationDiagnosticError, ApplicationErrorContext, ApplicationInputEvent,
+    ApplicationInputSystem, ApplicationKeyCode, ApplicationPointerButton, ApplicationVec3 as Vec3,
+    ApplicationWindowHandle, application_wrap_angle_pi as wrap_angle_pi,
 };
 use nord_camera::PerspectiveCamera;
+use std::time::Duration;
 
 const MOUSE_SENSITIVITY_RADIANS_PER_PIXEL: f32 = 0.003;
 const MAX_PITCH_RADIANS: f32 = 1.553_343;
@@ -105,6 +106,48 @@ impl GameCameraController {
     /// Reconcile the game-owned state when the native platform rejects capture.
     pub(crate) fn handle_cursor_capture_failure(&mut self) {
         self.cursor_locked = false;
+    }
+
+    /// Advance deterministic keyboard movement during one simulation step.
+    pub(crate) fn advance_fixed_step(
+        &mut self,
+        inputs: &ApplicationInputSystem,
+        step: Duration,
+    ) -> nord_app::ApplicationResult<()> {
+        let mut movement = Vec3::ZERO;
+        let forward = Vec3::new(self.camera.forward().x, 0.0, self.camera.forward().z)
+            .try_normalize()
+            .unwrap_or(-Vec3::Z);
+        let right = forward.cross(Vec3::Y).try_normalize().unwrap_or(Vec3::X);
+
+        if inputs.is_key_pressed(self.window, ApplicationKeyCode::Letter('W')) {
+            movement += forward;
+        }
+        if inputs.is_key_pressed(self.window, ApplicationKeyCode::Letter('S')) {
+            movement -= forward;
+        }
+        if inputs.is_key_pressed(self.window, ApplicationKeyCode::Letter('D')) {
+            movement += right;
+        }
+        if inputs.is_key_pressed(self.window, ApplicationKeyCode::Letter('A')) {
+            movement -= right;
+        }
+        if inputs.is_key_pressed(self.window, ApplicationKeyCode::Letter('E')) {
+            movement += Vec3::Y;
+        }
+        if inputs.is_key_pressed(self.window, ApplicationKeyCode::Letter('Q')) {
+            movement -= Vec3::Y;
+        }
+
+        let Some(direction) = movement.try_normalize() else {
+            return Ok(());
+        };
+        let distance = 5.0 * step.as_secs_f32();
+        let position = self.camera.position() + direction * distance;
+        self.camera
+            .set_pose(position, self.camera.forward(), Vec3::Y)
+            .map_err(ApplicationDiagnosticError::msg)
+            .context("advancing the game camera during a fixed simulation step")
     }
 
     #[cfg(test)]

@@ -10,23 +10,28 @@ simulation and presentation systems will be connected as they are built.
 
 ## Current lifecycle
 
-The initial runtime follows these phases:
+The runtime follows these phases:
 
 ```text
 Bootstrapping -> Running -> ShuttingDown -> Stopped
                      \-> Failed -> ShuttingDown -> Stopped
 ```
 
-Startup composes platform, logger, and game settings. The runtime installs one
-cross-platform Ctrl+C handler, polls normalized platform events every 16 ms,
-and advances the game-owned loop. Ctrl+C, a PAL quit event, or a future window
-close event requests an orderly shutdown. The signal callback only sets an
-atomic flag; normal application code performs logging and cleanup.
+Startup composes platform, logger, settings, a native window, and the renderer.
+The runtime installs one cross-platform Ctrl+C handler, pumps normalized
+platform events, advances the game-owned loop, and renders one frame. Ctrl+C, a
+PAL quit event, or a window close event requests an orderly shutdown. The signal
+callback only sets an atomic flag; normal application code performs logging and
+cleanup.
 
-The runtime is currently headless: there is no native window, renderer,
-simulation, fixed-timestep scheduler, or input handling yet. The poll cadence is
-only for keeping the app responsive to shutdown and platform events; it is not
-the game's simulation rate. Do not emit one log per input or loop iteration.
+The fixed-step accumulator invokes game systems once for each scheduled
+simulation step, bounded by the configured catch-up limit. The first connected
+system advances the free-flight camera from held keyboard input at the fixed
+step duration: W/A/S/D move horizontally and E/Q move vertically. Mouse-look
+remains event-driven. Rendering runs once per outer frame, independently of the
+number of simulation updates. World and collision simulation can be added to
+the same fixed-step callback as those systems are implemented. Do not emit one
+log per input or loop iteration.
 
 ## Error policy
 

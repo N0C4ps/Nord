@@ -83,7 +83,11 @@ impl ApplicationRuntime {
             if let Some(reason) = self.requested_shutdown() {
                 return Ok(reason);
             }
-            game_loop.advance(self.events.len()).context("advancing the game loop")?;
+            game_loop
+                .advance(self.events.len(), |fixed_step| {
+                    renderer.advance_simulation(input_system, fixed_step)
+                })
+                .context("advancing the game loop")?;
             renderer.render_frame()?;
             if renderer.surface_suspended() {
                 thread::sleep(Duration::from_millis(16));

@@ -705,6 +705,14 @@ impl GameRenderer {
         self.camera.handle_cursor_capture_failure();
     }
 
+    pub(super) fn advance_simulation(
+        &mut self,
+        inputs: &nord_app::ApplicationInputSystem,
+        fixed_step: std::time::Duration,
+    ) -> nord_app::ApplicationResult<()> {
+        self.camera.advance_fixed_step(inputs, fixed_step)
+    }
+
     pub(super) fn resize(&mut self, width: u32, height: u32) -> nord_app::ApplicationResult<()> {
         let renderer = self
             .renderer
