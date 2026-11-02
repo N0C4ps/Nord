@@ -54,8 +54,19 @@ pub(super) struct GameScene {
 }
 
 impl GameScene {
-    pub(super) fn demo_grid(local_bounds: Aabb3, model: Mat4) -> Self {
-        let mut instances = Vec::with_capacity(DEMO_INSTANCE_COUNT);
+    pub(super) const fn demo_instance_count() -> usize {
+        DEMO_INSTANCE_COUNT
+    }
+
+    pub(super) fn estimated_retained_cpu_bytes(instance_count: usize) -> Option<u64> {
+        let instances = instance_count.checked_mul(size_of::<SceneInstance>())?;
+        let data = instance_count.checked_mul(INSTANCE_STRIDE)?;
+        u64::try_from(instances.checked_add(data)?).ok()
+    }
+
+    pub(super) fn demo_grid(local_bounds: Aabb3, model: Mat4, instance_capacity: usize) -> Self {
+        let instance_capacity = instance_capacity.max(DEMO_INSTANCE_COUNT);
+        let mut instances = Vec::with_capacity(instance_capacity);
         for row in -20_i8..=20_i8 {
             for column in -20_i8..=20_i8 {
                 let translation = Vec3::new(
@@ -87,7 +98,8 @@ impl GameScene {
             }
         }
         instances.sort_by_key(|instance| instance.key);
-        let instance_data = encode_instances(&instances);
+        let mut instance_data = Vec::with_capacity(instance_capacity * INSTANCE_STRIDE);
+        encode_instances_into(&mut instance_data, &instances);
         Self { instances, instance_data }
     }
 
@@ -111,19 +123,26 @@ impl GameScene {
                 bounds: Some(bounds),
             });
         }
-        self.instance_data = encode_instances(&self.instances);
+        encode_instances_into(&mut self.instance_data, &self.instances);
         true
     }
 
     #[cfg(test)]
     fn from_instances(mut instances: Vec<SceneInstance>) -> Self {
         instances.sort_by_key(|instance| instance.key);
-        let instance_data = encode_instances(&instances);
+        let mut instance_data = Vec::with_capacity(instances.len() * INSTANCE_STRIDE);
+        encode_instances_into(&mut instance_data, &instances);
         Self { instances, instance_data }
     }
 
     pub(super) fn instance_count(&self) -> usize {
         self.instances.len()
+    }
+
+    pub(super) fn retained_cpu_bytes(&self) -> Option<u64> {
+        let instance_bytes = self.instances.capacity().checked_mul(size_of::<SceneInstance>())?;
+        let instance_data_bytes = self.instance_data.capacity().checked_mul(size_of::<u8>())?;
+        u64::try_from(instance_bytes.checked_add(instance_data_bytes)?).ok()
     }
 
     pub(super) fn conservative_instance_half_extents(&self) -> Option<Vec3> {
@@ -206,8 +225,8 @@ impl GameScene {
     }
 }
 
-fn encode_instances(instances: &[SceneInstance]) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(instances.len() * INSTANCE_STRIDE);
+fn encode_instances_into(bytes: &mut Vec<u8>, instances: &[SceneInstance]) {
+    bytes.clear();
     for instance in instances {
         for component in
             instance.data.translation.to_array().into_iter().chain(instance.data.tint.to_array())
@@ -215,7 +234,6 @@ fn encode_instances(instances: &[SceneInstance]) -> Vec<u8> {
             bytes.extend_from_slice(&component.to_le_bytes());
         }
     }
-    bytes
 }
 
 fn transform_bounds(bounds: Aabb3, transform: Mat4) -> Option<Aabb3> {
@@ -381,7 +399,7 @@ mod tests {
     #[test]
     fn grid_has_fixed_upload_layout_and_real_culling_reduces_draw_submissions() {
         let bounds = Aabb3::new(Vec3::splat(-0.5), Vec3::splat(0.5)).unwrap();
-        let scene = GameScene::demo_grid(bounds, Mat4::IDENTITY);
+        let scene = GameScene::demo_grid(bounds, Mat4::IDENTITY, GameScene::demo_instance_count());
         let mut mask = Vec::new();
         let mut ranges = Vec::new();
         let metrics = scene.update_visibility(camera_matrix(), &mut mask, &mut ranges);

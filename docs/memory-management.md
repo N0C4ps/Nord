@@ -11,8 +11,9 @@ na composição da aplicação. Outras crates não dependem diretamente de
 
 - **Memory budgets:** reservas concorrentes com limite opcional, pico observado
   e tokens RAII que liberam a contagem quando caem fora de escopo. São
-  contabilização cooperativa: o chamador reserva antes da alocação e mantém o
-  token enquanto possuir aquela memória.
+  contabilização cooperativa, não um contador do heap do processo: cada
+  proprietário reserva capacidade conhecida e mantém o token enquanto retém
+  aquela memória.
 - **Scratch arenas:** alocações temporárias para frame, job ou fase de loading,
   com limite de bytes de payload, cópia de slices e strings, contadores e reset
   em lote. Crie uma arena por worker ou fase; ela não é sincronizada.
@@ -35,8 +36,14 @@ na composição da aplicação. Outras crates não dependem diretamente de
    Pré-reserve slots antes de trechos sensíveis a latência e não compartilhe o
    pool entre threads sem sincronização externa.
 4. Separe orçamentos por subsistema e defina limites a partir de medições da
-   plataforma e do conteúdo. O Nord inicia com o orçamento global sem limite,
-   para evitar inventar um teto que ainda não foi medido.
+   plataforma e do conteúdo. O runtime registra as capacidades dos vetores CPU
+   persistentes da cena e dos buffers de visibilidade/sombra, além do contexto
+   temporário de frame. `memory.budget_bytes` permite limitar essas reservas;
+   sem a opção, o runtime registra consumo e pico sem impor um teto arbitrário.
+   Alocações temporárias e GPU não entram nesse contador. A memória GPU tem
+   contabilidade própria no renderer. Os eventos `application_started` e
+   `application_stopped` expõem o consumo rastreado; o evento final também
+   inclui o pico observado e o limite configurado.
 
 ## Alocador global e estabilidade
 

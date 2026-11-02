@@ -36,6 +36,7 @@ Double underscores separate nested field names. For example:
 $env:NORD__APPLICATION__TITLE = 'Nord: Sandbox'
 $env:NORD__WINDOW__WIDTH = '1600'
 $env:NORD__WINDOW__HEIGHT = '900'
+$env:NORD__MEMORY__BUDGET_BYTES = '536870912'
 $env:NORD__TIMING__MAX_FRAME_DELTA_MS = '250'
 $env:NORD__TIMING__TIME_SCALE = '1.0'
 ```
@@ -63,7 +64,11 @@ semantics.
 | `window.width` | `1280` | Positive client width in pixels |
 | `window.height` | `720` | Positive client height in pixels |
 | `window.resizable` | `true` | Boolean |
+| `memory.budget_bytes` | no limit | Optional positive limit for explicitly tracked game-owned CPU buffers |
 | `threading.worker_threads` | available parallelism minus one, minimum one | Positive integer when set |
+| `tasks.queue_capacity` | `2048` | Legacy scheduler setting; accepted and validated, but currently inactive |
+| `tasks.max_in_flight` | no limit | Legacy scheduler setting; currently inactive |
+| `tasks.priority_aging_interval_ms` | `250` | Legacy scheduler setting; currently inactive |
 | `timing.max_frame_delta_ms` | `250` | 1–60,000 |
 | `timing.fixed_step_ns` | `16,666,667` | 1–10,000,000,000 |
 | `timing.max_steps_per_frame` | `8` | 1–1,000 |

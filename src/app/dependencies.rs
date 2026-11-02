@@ -83,10 +83,10 @@ impl AppDependencies {
             None => loader.with_optional_file(platform.config_dir().join("nord.toml")).load(),
         }
         .context("loading and validating game configuration")?;
+        let memory = Arc::new(ApplicationMemoryManager::new(config.memory.budget_bytes));
         let configured_worker_threads = config.threading.worker_threads;
         let events = Arc::new(ApplicationEventSystem::new());
         let inputs = Arc::new(ApplicationInputSystem::new());
-        let memory = ApplicationMemoryManager::new(None);
         let main_window = create_main_window(&platform, &config)?;
         builder.register(config).context("registering game configuration")?;
         let thread_pool_config = match configured_worker_threads {
@@ -119,7 +119,7 @@ impl AppDependencies {
         builder.register_shared(inputs).context("registering the input system")?;
         builder.register_shared(logger).context("registering the application logger")?;
         builder.register(crash_reporter).context("registering application crash diagnostics")?;
-        builder.register(memory).context("registering application memory manager")?;
+        builder.register_shared(memory).context("registering application memory manager")?;
         builder.register_shared(thread_pool).context("registering the worker pool")?;
         builder.register_shared(jobs).context("registering the job system")?;
 
@@ -141,12 +141,16 @@ impl AppDependencies {
         let jobs = container
             .get::<ApplicationJobSystem>()
             .context("resolving the job system from application services")?;
+        let memory = container
+            .get::<ApplicationMemoryManager>()
+            .context("resolving application memory manager from services")?;
         let renderer = GameRenderer::initialize(
             &platform,
             main_window,
             config.window.width,
             config.window.height,
             (*jobs).clone(),
+            &memory,
         )?;
         Ok(Self {
             config,
@@ -156,9 +160,7 @@ impl AppDependencies {
             _crash_reporter: container
                 .get::<ApplicationCrashReporter>()
                 .context("resolving application crash diagnostics from services")?,
-            memory: container
-                .get::<ApplicationMemoryManager>()
-                .context("resolving application memory manager from services")?,
+            memory,
             platform,
             main_window,
             renderer,

@@ -7,13 +7,11 @@
     "height": 720,
     "resizable": true
   },
+  "memory": {
+    "budget_bytes": null
+  },
   "threading": {
     "worker_threads": null
-  },
-  "tasks": {
-    "queue_capacity": 2048,
-    "max_in_flight": null,
-    "priority_aging_interval_ms": 250
   },
   "timing": {
     "max_frame_delta_ms": 250,

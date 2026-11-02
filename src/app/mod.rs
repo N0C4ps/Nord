@@ -99,6 +99,8 @@ impl Application {
                     platform_backend = ?self.dependencies.platform.backend(),
                     platform_architecture = self.dependencies.platform.architecture(),
                     job_worker_threads = self.dependencies.jobs.worker_threads().get(),
+                    tracked_cpu_memory_bytes = self.dependencies.memory.snapshot().current_bytes,
+                    memory_budget_bytes = ?self.dependencies.memory.snapshot().limit_bytes,
                     "Nord application runtime started"
                 );
                 (Some(runtime), None)
@@ -192,6 +194,7 @@ impl Application {
     }
 
     fn log_stopped(&self, reason: ShutdownReason, game_loop: &GameLoop) {
+        let memory_stats = self.dependencies.memory.snapshot();
         nord_app::info!(
             name: "application_stopped",
             target: "nord::app",
@@ -201,6 +204,9 @@ impl Application {
             scheduled_simulation_steps = game_loop.scheduled_steps(),
             dropped_simulation_time_ms = game_loop.dropped_simulation_time().as_millis(),
             last_fps = ?game_loop.latest_fps(),
+            tracked_cpu_memory_bytes = memory_stats.current_bytes,
+            peak_tracked_cpu_memory_bytes = memory_stats.peak_bytes,
+            memory_budget_bytes = ?memory_stats.limit_bytes,
             "Nord application runtime stopped"
         );
     }

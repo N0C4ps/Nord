@@ -233,7 +233,7 @@ mod tests {
         let bounds = Aabb3::new(Vec3::splat(-1.0), Vec3::splat(1.0))
             .expect("unit test cube bounds should be valid");
         let model = Mat4::from_scale(Vec3::splat(0.9));
-        let scene = GameScene::demo_grid(bounds, model);
+        let scene = GameScene::demo_grid(bounds, model, GameScene::demo_instance_count());
         let mut visible_mask = Vec::new();
         let mut draw_ranges = Vec::new();
         let light_matrix = directional_light_view_projection()

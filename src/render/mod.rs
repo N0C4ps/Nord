@@ -46,6 +46,7 @@ struct GameSurface {
 /// Game-owned policy that connects Nord's generic renderer to the app loop.
 pub(super) struct GameRenderer {
     jobs: ApplicationJobSystem,
+    _cpu_memory_reservation: nord_app::ApplicationMemoryReservation,
     renderer: Option<ApplicationRenderer>,
     surface: GameSurface,
     vertex_buffer: nord_app::ApplicationGpuResourceHandle,
@@ -103,6 +104,7 @@ impl GameRenderer {
         width: u32,
         height: u32,
         jobs: ApplicationJobSystem,
+        memory: &nord_app::ApplicationMemoryManager,
     ) -> nord_app::ApplicationResult<Self> {
         let aspect_ratio = surface_aspect(width, height)?;
         let camera = GameCameraController::new(create_game_camera(aspect_ratio)?, window);
@@ -121,9 +123,32 @@ impl GameRenderer {
         let mesh = make_test_cube()?;
         let model = test_cube_transform()?;
         let mesh_gpu = Self::upload_test_mesh(&mut renderer, &mesh)?;
-        let mut scene = GameScene::demo_grid(mesh.validated_mesh.bounds(), model);
         let occlusion_probe_enabled =
             std::env::var("NORD_OCCLUSION_STRESS_SCENE").is_ok_and(|value| value == "1");
+        let instance_capacity = GameScene::demo_instance_count()
+            .checked_add(if occlusion_probe_enabled { 8 } else { 0 })
+            .ok_or_else(|| {
+                ApplicationDiagnosticError::msg("game scene instance count overflowed")
+            })?;
+        let estimated_cpu_memory_bytes = [
+            GameScene::estimated_retained_cpu_bytes(instance_capacity).ok_or_else(|| {
+                ApplicationDiagnosticError::msg("game scene CPU memory estimate overflowed")
+            })?,
+            vector_capacity_bytes::<u8>(instance_capacity)?,
+            vector_capacity_bytes::<DrawRange>(instance_capacity)?,
+            vector_capacity_bytes::<u128>(96)?,
+        ]
+        .into_iter()
+        .try_fold(0_u64, |total, bytes| total.checked_add(bytes))
+        .ok_or_else(|| {
+            ApplicationDiagnosticError::msg("game renderer CPU memory estimate overflowed")
+        })?;
+        let mut cpu_memory_reservation = memory
+            .reserve(estimated_cpu_memory_bytes)
+            .map_err(ApplicationDiagnosticError::msg)
+            .context("reserving memory before growing retained game CPU buffers")?;
+        let mut scene =
+            GameScene::demo_grid(mesh.validated_mesh.bounds(), model, instance_capacity);
         let occlusion_probe_added =
             occlusion_probe_enabled && scene.add_occlusion_probe(camera.camera().forward());
         if occlusion_probe_enabled && !occlusion_probe_added {
@@ -168,6 +193,24 @@ impl GameRenderer {
         );
         let (shadow_visibility_mask, shadow_draw_ranges, initial_shadow_metrics) =
             initial_shadow_visibility(&scene)?;
+        let benchmark_samples = Vec::with_capacity(96);
+        let tracked_cpu_memory_bytes = [
+            scene.retained_cpu_bytes().ok_or_else(|| {
+                ApplicationDiagnosticError::msg("game scene CPU memory accounting overflowed")
+            })?,
+            vector_capacity_bytes::<u8>(shadow_visibility_mask.capacity())?,
+            vector_capacity_bytes::<DrawRange>(shadow_draw_ranges.capacity())?,
+            vector_capacity_bytes::<u128>(benchmark_samples.capacity())?,
+        ]
+        .into_iter()
+        .try_fold(0_u64, |total, bytes| total.checked_add(bytes))
+        .ok_or_else(|| {
+            ApplicationDiagnosticError::msg("game renderer CPU memory accounting overflowed")
+        })?;
+        cpu_memory_reservation
+            .resize(tracked_cpu_memory_bytes)
+            .map_err(ApplicationDiagnosticError::msg)
+            .context("reconciling reservations with retained game CPU buffer capacities")?;
         let allocator_stats = renderer.gpu_allocator_stats();
         nord_app::debug!(
             target: "nord::render",
@@ -220,6 +263,7 @@ impl GameRenderer {
         );
         Ok(Self {
             jobs,
+            _cpu_memory_reservation: cpu_memory_reservation,
             renderer: Some(renderer),
             surface,
             vertex_buffer: mesh_gpu.vertex_buffer,
@@ -233,7 +277,7 @@ impl GameRenderer {
             gpu_culling,
             occlusion,
             benchmark_pending: std::env::var_os("NORD_RENDER_BENCHMARK").is_some(),
-            benchmark_samples: Vec::with_capacity(96),
+            benchmark_samples,
             cpu_culling_baseline: initial_metrics,
             gpu_validation_pending: std::env::var_os("NORD_GPU_DRIVEN_VALIDATE").is_some(),
             camera_buffer,
@@ -1038,6 +1082,13 @@ fn surface_aspect(width: u32, height: u32) -> nord_app::ApplicationResult<f32> {
     let width = exact_surface_extent(width)?;
     let height = exact_surface_extent(height)?;
     Ok(width / height)
+}
+
+fn vector_capacity_bytes<T>(capacity: usize) -> nord_app::ApplicationResult<u64> {
+    let bytes = capacity
+        .checked_mul(std::mem::size_of::<T>())
+        .ok_or_else(|| ApplicationDiagnosticError::msg("vector memory accounting overflowed"))?;
+    u64::try_from(bytes).map_err(ApplicationDiagnosticError::msg)
 }
 
 fn exact_surface_extent(extent: u32) -> nord_app::ApplicationResult<f32> {

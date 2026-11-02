@@ -6,6 +6,9 @@ width = 1280
 height = 720
 resizable = true
 
+[memory]
+# Optional cap for explicitly tracked game-owned CPU buffers; omit for no cap.
+
 [threading]
 # Omit this value to reserve one logical processor for the application thread.
 # worker_threads = 7

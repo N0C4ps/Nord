@@ -16,7 +16,6 @@ impl ScratchArena {
     #[must_use]
     pub fn new(byte_limit: Option<usize>) -> Self {
         let bump = Bump::new();
-        bump.set_allocation_limit(byte_limit);
         Self { bump, byte_limit, payload_bytes: Cell::new(0) }
     }
 
@@ -170,3 +169,35 @@ impl std::fmt::Display for ArenaAllocationError {
 }
 
 impl std::error::Error for ArenaAllocationError {}
+
+#[cfg(test)]
+mod tests {
+    use super::ScratchArena;
+
+    #[test]
+    fn payload_limit_excludes_bump_chunk_overhead_and_reset_reuses_budget() {
+        let limit = std::mem::size_of::<u64>();
+        let mut arena = ScratchArena::new(Some(limit));
+
+        *arena.try_alloc(42_u64).expect("payload should fit the limit") = 7;
+        assert_eq!(arena.payload_bytes(), limit);
+        assert!(arena.allocated_bytes() >= limit);
+
+        let error = arena.try_alloc(1_u8).expect_err("additional payload must exceed limit");
+        assert_eq!(error.requested_bytes, 1);
+        assert_eq!(error.allocated_payload_bytes, limit);
+        assert_eq!(error.limit_bytes, Some(limit));
+
+        arena.reset();
+        assert_eq!(arena.payload_bytes(), 0);
+        assert_eq!(*arena.try_alloc(9_u64).expect("reset should restore payload budget"), 9);
+    }
+
+    #[test]
+    fn copied_slices_and_strings_count_payload_bytes() {
+        let arena = ScratchArena::new(Some(7));
+        assert_eq!(arena.try_alloc_slice_copy(&[1_u16, 2]).unwrap(), &[1, 2]);
+        assert_eq!(arena.try_alloc_str("abc").unwrap(), "abc");
+        assert_eq!(arena.payload_bytes(), 7);
+    }
+}

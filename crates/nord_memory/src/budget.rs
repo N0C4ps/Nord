@@ -173,3 +173,36 @@ impl std::fmt::Display for MemoryBudgetError {
 }
 
 impl std::error::Error for MemoryBudgetError {}
+
+#[cfg(test)]
+mod tests {
+    use super::MemoryBudget;
+
+    #[test]
+    fn reservations_track_lifetime_and_peak_across_budget_clones() {
+        let budget = MemoryBudget::new(Some(16));
+        let shared_budget = budget.clone();
+        let reservation = shared_budget.reserve(8).unwrap();
+        assert_eq!(budget.snapshot().current_bytes, 8);
+        assert_eq!(budget.snapshot().peak_bytes, 8);
+
+        drop(reservation);
+        assert_eq!(budget.snapshot().current_bytes, 0);
+        assert_eq!(budget.snapshot().peak_bytes, 8);
+    }
+
+    #[test]
+    fn failed_growth_preserves_reservation_and_shrinking_releases_bytes() {
+        let budget = MemoryBudget::new(Some(16));
+        let mut reservation = budget.reserve(8).unwrap();
+        let error = reservation.resize(17).unwrap_err();
+        assert_eq!(error.current_bytes, 8);
+        assert_eq!(error.requested_bytes, 9);
+        assert_eq!(reservation.bytes(), 8);
+        assert_eq!(budget.snapshot().current_bytes, 8);
+
+        reservation.resize(3).unwrap();
+        assert_eq!(reservation.bytes(), 3);
+        assert_eq!(budget.snapshot().current_bytes, 3);
+    }
+}

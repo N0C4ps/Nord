@@ -156,3 +156,24 @@ impl<T> std::fmt::Display for PoolInsertError<T> {
 }
 
 impl<T: std::fmt::Debug> std::error::Error for PoolInsertError<T> {}
+
+#[cfg(test)]
+mod tests {
+    use super::ObjectPool;
+
+    #[test]
+    fn reused_slots_advance_generation_and_reject_stale_handles() {
+        let mut pool = ObjectPool::new();
+        pool.try_reserve(1).unwrap();
+        let first = pool.try_insert("first").unwrap();
+        assert_eq!(pool.remove(first), Some("first"));
+        assert_eq!(pool.get(first), None);
+
+        let second = pool.try_insert("second").unwrap();
+        assert_eq!(second.index(), first.index());
+        assert_eq!(second.generation(), first.generation() + 1);
+        assert_eq!(pool.get(first), None);
+        assert_eq!(pool.get(second), Some(&"second"));
+        assert_eq!(pool.len(), 1);
+    }
+}

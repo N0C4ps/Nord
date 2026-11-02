@@ -10,7 +10,7 @@ use std::time::Duration;
 pub(super) struct GameLoop {
     iterations: u64,
     scheduled_steps: u64,
-    memory: nord_app::ApplicationMemoryManager,
+    _frame_context_reservation: nord_app::ApplicationMemoryReservation,
     frame_scratch: nord_app::ApplicationScratchArena,
     clock: ApplicationFrameClock,
     fixed_steps: ApplicationFixedStepAccumulator,
@@ -37,10 +37,15 @@ impl GameLoop {
         .map_err(nord_app::ApplicationDiagnosticError::msg)
         .context("building configured fixed-step simulation")?;
         let fixed_step = fixed_step_config.step();
+        let frame_context_bytes = u64::try_from(std::mem::size_of::<FrameContext>())?;
+        let frame_context_reservation = memory
+            .reserve(frame_context_bytes)
+            .map_err(nord_app::ApplicationDiagnosticError::msg)
+            .context("reserving memory for the game frame context")?;
         Ok(Self {
             iterations: 0,
             scheduled_steps: 0,
-            memory: memory.clone(),
+            _frame_context_reservation: frame_context_reservation,
             frame_scratch: memory.create_scratch_arena(None),
             clock,
             fixed_steps: ApplicationFixedStepAccumulator::new(fixed_step_config),
@@ -67,12 +72,6 @@ impl GameLoop {
             fixed_update(self.fixed_step).context("running a fixed-step game system")?;
         }
 
-        let frame_context_bytes = u64::try_from(std::mem::size_of::<FrameContext>())?;
-        let _frame_reservation = self
-            .memory
-            .reserve(frame_context_bytes)
-            .map_err(nord_app::ApplicationDiagnosticError::msg)
-            .context("reserving memory for the current game frame")?;
         {
             let frame = self
                 .frame_scratch
