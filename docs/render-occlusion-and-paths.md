@@ -2,9 +2,9 @@
 
 ## Current decision
 
-The game keeps the forward PBR path and enables same-frame Hi-Z by default.
-Set `NORD_OCCLUSION_CULLING=0` only to run the frustum-only reference path for
-diagnostics or A/B comparisons.
+The game uses the forward PBR path with GPU frustum culling by default. Same-frame
+Hi-Z is opt-in: set `NORD_OCCLUSION_CULLING=1` (or `true`) to enable it. An unset
+variable, `0`, or `false` keeps the frustum-only path.
 
 No deferred renderer is added at this stage. Occlusion culling is a visibility
 decision that can feed either forward or deferred shading. These measurements
@@ -13,7 +13,8 @@ shading path.
 
 ## Same-frame conservative Hi-Z
 
-The default path records these render-graph dependencies in the same frame:
+When enabled, the Hi-Z path records these render-graph dependencies in the same
+frame:
 
 1. Run the current GPU frustum pass and compact candidates into the existing
    instance buffer.
@@ -62,9 +63,10 @@ captured output in this test. The diagnostic benchmark waits for GPU completion
 after each frame, so it compares completed frame cost consistently but
 serializes CPU/GPU work; it is not a throughput benchmark for a fully pipelined
 production loop. The probe confirms that Hi-Z culls fully hidden instances, but
-this small scene still costs about 2x as much at p50 as frustum-only. The default
-path is enabled as requested; revisit its cost against a dense voxel world with
-large opaque occluders and during camera motion.
+this small scene costs about 2x as much at p50 as frustum-only while rejecting
+only six instances. The result does not establish performance for a
+representative voxel world, so Hi-Z remains opt-in until it is measured against
+representative scenes, including large opaque occluders and camera motion.
 
 ## Reproduce
 

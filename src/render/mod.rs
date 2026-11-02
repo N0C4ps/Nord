@@ -831,7 +831,7 @@ fn collect_render_benchmark(
 
 fn occlusion_culling_enabled() -> bool {
     std::env::var("NORD_OCCLUSION_CULLING")
-        .map_or(true, |value| value != "0" && !value.eq_ignore_ascii_case("false"))
+        .is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
 }
 
 fn create_game_camera(aspect_ratio: f32) -> nord_app::ApplicationResult<PerspectiveCamera> {
