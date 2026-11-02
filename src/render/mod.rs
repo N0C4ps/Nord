@@ -43,6 +43,30 @@ struct GameSurface {
     height: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SurfaceResizeAction {
+    Suspend,
+    Resume,
+    Unchanged,
+    Recreate,
+}
+
+fn surface_resize_action(
+    current_width: u32,
+    current_height: u32,
+    width: u32,
+    height: u32,
+    surface_suspended: bool,
+) -> SurfaceResizeAction {
+    if width == 0 || height == 0 {
+        SurfaceResizeAction::Suspend
+    } else if width == current_width && height == current_height {
+        if surface_suspended { SurfaceResizeAction::Resume } else { SurfaceResizeAction::Unchanged }
+    } else {
+        SurfaceResizeAction::Recreate
+    }
+}
+
 /// Game-owned policy that connects Nord's generic renderer to the app loop.
 pub(super) struct GameRenderer {
     jobs: ApplicationJobSystem,
@@ -766,20 +790,27 @@ impl GameRenderer {
             .renderer
             .as_mut()
             .ok_or_else(|| ApplicationDiagnosticError::msg("renderer has already shut down"))?;
-        if width == 0 || height == 0 {
-            return renderer
-                .resize(width, height)
-                .map_err(ApplicationDiagnosticError::msg)
-                .context("suspending the Nord render surface");
-        }
-        if width == self.surface.width && height == self.surface.height {
-            if renderer.surface_suspended() {
-                renderer
+        match surface_resize_action(
+            self.surface.width,
+            self.surface.height,
+            width,
+            height,
+            renderer.surface_suspended(),
+        ) {
+            SurfaceResizeAction::Suspend => {
+                return renderer
                     .resize(width, height)
                     .map_err(ApplicationDiagnosticError::msg)
-                    .context("resuming the Nord render surface")?;
+                    .context("suspending the Nord render surface");
             }
-            return Ok(());
+            SurfaceResizeAction::Resume => {
+                return renderer
+                    .resize(width, height)
+                    .map_err(ApplicationDiagnosticError::msg)
+                    .context("resuming the Nord render surface");
+            }
+            SurfaceResizeAction::Unchanged => return Ok(()),
+            SurfaceResizeAction::Recreate => {}
         }
         let aspect_ratio = surface_aspect(width, height)?;
         if let Some(occlusion) = self.occlusion.take() {
@@ -1100,4 +1131,27 @@ fn exact_surface_extent(extent: u32) -> nord_app::ApplicationResult<f32> {
     }
     #[allow(clippy::cast_precision_loss)]
     Ok(extent as f32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SurfaceResizeAction, surface_resize_action};
+
+    #[test]
+    fn minimized_surface_resumes_even_when_restored_to_the_same_extent() {
+        assert_eq!(surface_resize_action(1280, 720, 0, 0, false), SurfaceResizeAction::Suspend);
+        assert_eq!(surface_resize_action(1280, 720, 1280, 720, true), SurfaceResizeAction::Resume);
+    }
+
+    #[test]
+    fn resize_policy_distinguishes_noop_and_surface_recreation() {
+        assert_eq!(
+            surface_resize_action(1280, 720, 1280, 720, false),
+            SurfaceResizeAction::Unchanged
+        );
+        assert_eq!(
+            surface_resize_action(1280, 720, 1600, 900, false),
+            SurfaceResizeAction::Recreate
+        );
+    }
 }

@@ -139,7 +139,8 @@ graphics and compute passes, real UAV and aliasing barriers, GPU pixel and
 persistent-UAV readback assertions, independent pixel assertions proving both
 meshes remain visible, the nearer mesh wins the overlap, the second color
 output is written, and scissor clipping works, resource retirement,
-allocator accounting, and excess-heap trimming. Allocator,
+allocator accounting, excess-heap trimming, and zero-size suspension followed
+by same-size restoration and repeated swapchain resizing. Allocator,
 descriptor-generation, resource-description, and pipeline-cache rules also
 have CPU unit tests in `nord_render`.
 

@@ -45,6 +45,19 @@ fn validate_resources(
         ApplicationRenderer::initialize(platform, window, ApplicationRenderConfig::new(128, 128))?;
     println!("PASS: D3D12 device, swapchain, and frame submission");
 
+    renderer.resize(0, 0)?;
+    assert!(renderer.surface_suspended(), "zero-sized surface was not suspended");
+    renderer.resize(128, 128)?;
+    assert!(!renderer.surface_suspended(), "same-size restore did not resume the swapchain");
+    renderer.resize(96, 80)?;
+    assert!(!renderer.surface_suspended(), "non-zero resize left the swapchain suspended");
+    renderer.resize(128, 128)?;
+    assert!(
+        !renderer.surface_suspended(),
+        "restoring the original extent left the swapchain suspended"
+    );
+    println!("PASS: D3D12 minimize, same-size restore, and repeated resize lifecycle");
+
     let local_budget = renderer.memory_budget(nord_app::ApplicationGpuMemorySegment::Local)?;
     let non_local_budget =
         renderer.memory_budget(nord_app::ApplicationGpuMemorySegment::NonLocal)?;

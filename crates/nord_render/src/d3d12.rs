@@ -3899,6 +3899,8 @@ impl D3d12Renderer {
         // dropped before DXGI resizes them.
         unsafe {
             self.wait_idle()?;
+            // Keep rendering disabled if DXGI or back-buffer recovery fails.
+            self.suspended = true;
             self.back_buffers.clear();
             self.swapchain
                 .ResizeBuffers(
