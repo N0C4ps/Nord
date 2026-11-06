@@ -13,7 +13,7 @@ nord_jobs = { path = "../nord_jobs" }
 nord_threading = { path = "../nord_threading" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.58.0", features = [
+windows = { version = "0.62.2", features = [
     "Win32_Foundation",
     "Win32_Graphics_Direct3D",
     "Win32_Graphics_Direct3D_Dxc",
