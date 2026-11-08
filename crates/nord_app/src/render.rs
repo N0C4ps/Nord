@@ -1,10 +1,16 @@
 use crate::{ApplicationJobSystem, ApplicationPlatform, ApplicationWindowHandle};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use std::time::Instant;
+
+fn elapsed_benchmark_ns(start: Option<Instant>) -> u64 {
+    start.map_or(0, |start| u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX))
+}
 
 pub use nord_render::{
-    ClearColor as ApplicationClearColor, GpuMemoryBudget as ApplicationGpuMemoryBudget,
-    GpuMemorySegment as ApplicationGpuMemorySegment, RenderBackend as ApplicationRenderBackend,
+    ClearColor as ApplicationClearColor, GpuFrameTiming as ApplicationGpuFrameTiming,
+    GpuMemoryBudget as ApplicationGpuMemoryBudget, GpuMemorySegment as ApplicationGpuMemorySegment,
+    GpuPassTiming as ApplicationGpuPassTiming, RenderBackend as ApplicationRenderBackend,
 };
 
 pub use nord_render::{
@@ -87,6 +93,19 @@ impl From<ApplicationRenderCommandEncodingError> for ApplicationRenderError {
 /// App-owned renderer facade; native handles and backend objects stay out of game code.
 pub struct ApplicationRenderer {
     inner: nord_render::Renderer,
+    benchmark_timing_enabled: bool,
+    last_queue_timing: ApplicationRenderQueueTiming,
+}
+
+/// CPU costs of one render queue submission. Filled when NORD_RENDER_BENCHMARK is set.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ApplicationRenderQueueTiming {
+    pub encode_ns: u64,
+    pub transients_ns: u64,
+    pub barriers_ns: u64,
+    pub commands_ns: u64,
+    pub submit_ns: u64,
+    pub cleanup_ns: u64,
 }
 
 /// Game-facing render queue. Pass callbacks use the application facade and
@@ -110,7 +129,11 @@ impl ApplicationRenderer {
             ApplicationRenderError(nord_render::RenderError::Backend(error.to_string()))
         })?;
         nord_render::Renderer::new(native_window, config)
-            .map(|inner| Self { inner })
+            .map(|inner| Self {
+                inner,
+                benchmark_timing_enabled: std::env::var_os("NORD_RENDER_BENCHMARK").is_some(),
+                last_queue_timing: ApplicationRenderQueueTiming::default(),
+            })
             .map_err(ApplicationRenderError)
     }
 
@@ -505,7 +528,10 @@ impl ApplicationRenderer {
         queue: &mut ApplicationRenderQueue,
         jobs: &ApplicationJobSystem,
     ) -> Result<ApplicationCompiledRenderGraph, ApplicationRenderQueueError> {
+        let stage_start = self.benchmark_timing_enabled.then(Instant::now);
         let (compiled, buffers) = queue.encode_parallel(jobs)?;
+        let encode_ns = elapsed_benchmark_ns(stage_start);
+        let stage_start = self.benchmark_timing_enabled.then(Instant::now);
         let resources = self.inner.create_transient_resources(&compiled).map_err(|error| {
             ApplicationRenderQueueError::TransientResources(ApplicationRenderError(error))
         })?;
@@ -516,6 +542,8 @@ impl ApplicationRenderer {
                 error,
             )));
         }
+        let transients_ns = elapsed_benchmark_ns(stage_start);
+        let stage_start = self.benchmark_timing_enabled.then(Instant::now);
         let mut recorded =
             match self.inner.record_graph_barriers_parallel(&compiled, &resources, jobs) {
                 Ok(recorded) => recorded,
@@ -526,6 +554,8 @@ impl ApplicationRenderer {
                     ));
                 }
             };
+        let barriers_ns = elapsed_benchmark_ns(stage_start);
+        let stage_start = self.benchmark_timing_enabled.then(Instant::now);
         let mut commands = match self
             .inner
             .record_graph_commands_parallel(&compiled, &resources, &buffers, jobs)
@@ -538,7 +568,9 @@ impl ApplicationRenderer {
                 ));
             }
         };
-        if let Err(error) = self.inner.begin_graph_submission() {
+        let commands_ns = elapsed_benchmark_ns(stage_start);
+        let stage_start = self.benchmark_timing_enabled.then(Instant::now);
+        if let Err(error) = self.inner.begin_graph_submission(&compiled) {
             let _ = self.inner.destroy_transient_resources(resources);
             return Err(ApplicationRenderQueueError::TransientResources(ApplicationRenderError(
                 error,
@@ -560,13 +592,35 @@ impl ApplicationRenderer {
         let retirement = self.inner.end_graph_submission().map_err(|error| {
             ApplicationRenderQueueError::TransientResources(ApplicationRenderError(error))
         });
+        let submit_ns = elapsed_benchmark_ns(stage_start);
+        let stage_start = self.benchmark_timing_enabled.then(Instant::now);
         let cleanup = self.inner.destroy_transient_resources(resources).map_err(|error| {
             ApplicationRenderQueueError::TransientResources(ApplicationRenderError(error))
         });
+        self.last_queue_timing = ApplicationRenderQueueTiming {
+            encode_ns,
+            transients_ns,
+            barriers_ns,
+            commands_ns,
+            submit_ns,
+            cleanup_ns: elapsed_benchmark_ns(stage_start),
+        };
         match (submission_error, retirement, cleanup) {
             (Some(error), _, _) | (None, Err(error), _) | (None, Ok(()), Err(error)) => Err(error),
             (None, Ok(()), Ok(())) => Ok(compiled),
         }
+    }
+
+    #[must_use]
+    pub const fn last_queue_timing(&self) -> ApplicationRenderQueueTiming {
+        self.last_queue_timing
+    }
+
+    /// Return GPU timestamps whose direct-queue fences have completed.
+    pub fn take_gpu_frame_timings(
+        &mut self,
+    ) -> Result<Vec<ApplicationGpuFrameTiming>, ApplicationRenderError> {
+        self.inner.take_gpu_frame_timings().map_err(ApplicationRenderError)
     }
 
     /// Evict pipeline states last used before `minimum_frame` after queue idle.
@@ -606,6 +660,17 @@ impl ApplicationRenderer {
         self.inner.upload_buffer(resource, offset, bytes).map_err(ApplicationRenderError)
     }
 
+    /// Upload multiple device-local buffers in one renderer submission.
+    ///
+    /// # Errors
+    /// Returns an error when any resource/range is invalid or the copy submission fails.
+    pub fn upload_buffers(
+        &mut self,
+        uploads: &[(ApplicationGpuResourceHandle, u64, &[u8])],
+    ) -> Result<(), ApplicationRenderError> {
+        self.inner.upload_buffers(uploads).map_err(ApplicationRenderError)
+    }
+
     /// Upload one mip/array-layer texture subresource with the provided source row pitch.
     ///
     /// # Errors
@@ -632,6 +697,17 @@ impl ApplicationRenderer {
         handle: ApplicationGpuResourceHandle,
     ) -> Result<(), ApplicationRenderError> {
         self.inner.destroy_resource(handle).map_err(ApplicationRenderError)
+    }
+
+    /// Destroy several GPU resources after one queue synchronization.
+    ///
+    /// # Errors
+    /// Returns an error for stale/duplicate resources or a failed GPU fence wait.
+    pub fn destroy_resources(
+        &mut self,
+        handles: &[ApplicationGpuResourceHandle],
+    ) -> Result<(), ApplicationRenderError> {
+        self.inner.destroy_resources(handles).map_err(ApplicationRenderError)
     }
 
     /// Retire GPU work before the platform destroys its native window.

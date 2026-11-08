@@ -521,12 +521,11 @@ impl RenderCommandEncoder {
         }
         if color_attachments.is_empty()
             || color_attachments.len() > 8
-            || color_attachments
-                .iter()
-                .map(|attachment| attachment.resource)
-                .collect::<HashSet<_>>()
-                .len()
-                != color_attachments.len()
+            || color_attachments.iter().enumerate().any(|(index, attachment)| {
+                color_attachments[..index]
+                    .iter()
+                    .any(|previous| previous.resource == attachment.resource)
+            })
             || color_attachments.iter().any(|attachment| {
                 attachment
                     .clear_color
@@ -629,8 +628,9 @@ impl RenderCommandEncoder {
             return Err(RenderCommandEncodingError::InvalidDescriptorTable);
         }
         if vertex_buffers.iter().any(|binding| binding.size == 0 || binding.stride == 0)
-            || vertex_buffers.iter().map(|binding| binding.slot).collect::<HashSet<_>>().len()
-                != vertex_buffers.len()
+            || vertex_buffers.iter().enumerate().any(|(index, binding)| {
+                vertex_buffers[..index].iter().any(|previous| previous.slot == binding.slot)
+            })
         {
             return Err(RenderCommandEncodingError::InvalidVertexBufferBinding);
         }
@@ -1218,11 +1218,12 @@ pub enum RenderQueueError<E> {
 pub struct RenderQueue<E> {
     graph: RenderGraph,
     callbacks: Vec<Option<RenderPassCallback<E>>>,
+    inline_encoding: bool,
 }
 
 impl<E> Default for RenderQueue<E> {
     fn default() -> Self {
-        Self { graph: RenderGraph::new(), callbacks: Vec::new() }
+        Self { graph: RenderGraph::new(), callbacks: Vec::new(), inline_encoding: false }
     }
 }
 
@@ -1230,6 +1231,14 @@ impl<E> RenderQueue<E> {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Execute encoder callbacks on the caller thread when their work is small
+    /// enough that worker dispatch would cost more than encoding.
+    #[must_use]
+    pub fn with_inline_encoding(mut self) -> Self {
+        self.inline_encoding = true;
+        self
     }
 
     /// Declare a transient texture before adding passes that use its ID.
@@ -1308,7 +1317,7 @@ impl<E> RenderQueue<E> {
                     }),
             );
         };
-        if work.len() <= 1 {
+        if self.inline_encoding || work.len() <= 1 {
             for item in &mut work {
                 encode(item);
             }

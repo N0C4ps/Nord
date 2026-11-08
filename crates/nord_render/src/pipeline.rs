@@ -264,6 +264,12 @@ impl GraphicsPipelineDesc {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PipelineKey(pub GraphicsPipelineDesc);
 
+impl std::borrow::Borrow<GraphicsPipelineDesc> for PipelineKey {
+    fn borrow(&self) -> &GraphicsPipelineDesc {
+        &self.0
+    }
+}
+
 /// Runtime metadata about a cached native pipeline object.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PipelineCacheEntry {

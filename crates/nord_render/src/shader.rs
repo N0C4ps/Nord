@@ -5,6 +5,7 @@ use crate::ShaderStage;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(1);
@@ -104,9 +105,9 @@ impl ShaderReflection {
 pub struct CompiledShader {
     pub stage: ShaderStage,
     pub shader_id: crate::ShaderId,
-    pub bytecode: Vec<u8>,
-    pub reflection: ShaderReflection,
-    pub diagnostics: Vec<ShaderDiagnostic>,
+    pub bytecode: Arc<[u8]>,
+    pub reflection: Arc<ShaderReflection>,
+    pub diagnostics: Arc<[ShaderDiagnostic]>,
 }
 
 /// DXC command-line compiler. `NORD_DXC_PATH` can point to a pinned compiler;
@@ -218,9 +219,9 @@ impl ShaderCompiler {
         Ok(CompiledShader {
             stage: options.stage,
             shader_id,
-            bytecode,
-            reflection: ShaderReflection { binary, dump, bindings },
-            diagnostics,
+            bytecode: bytecode.into(),
+            reflection: Arc::new(ShaderReflection { binary, dump, bindings }),
+            diagnostics: diagnostics.into(),
         })
     }
 }
@@ -255,13 +256,13 @@ impl CompiledShader {
         Ok(Self {
             stage,
             shader_id,
-            bytecode,
-            reflection: ShaderReflection {
+            bytecode: bytecode.into(),
+            reflection: Arc::new(ShaderReflection {
                 binary: reflection_binary,
                 dump: reflection_dump,
                 bindings,
-            },
-            diagnostics: Vec::new(),
+            }),
+            diagnostics: Arc::from([]),
         })
     }
 }

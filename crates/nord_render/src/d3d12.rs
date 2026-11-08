@@ -15,6 +15,7 @@ use std::ffi::{CString, c_void};
 use std::mem::ManuallyDrop;
 use std::num::NonZeroU32;
 use std::ptr::NonNull;
+use std::sync::{Arc, Mutex};
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND};
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 use windows::Win32::Graphics::Direct3D12::{
@@ -45,34 +46,35 @@ use windows::Win32::Graphics::Direct3D12::{
     D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, D3D12_INPUT_ELEMENT_DESC, D3D12_INPUT_LAYOUT_DESC,
     D3D12_LOGIC_OP_NOOP, D3D12_MEMORY_POOL_UNKNOWN, D3D12_PLACED_SUBRESOURCE_FOOTPRINT,
     D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE, D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT,
-    D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE, D3D12_RANGE, D3D12_RASTERIZER_DESC,
-    D3D12_RENDER_TARGET_BLEND_DESC, D3D12_RESOURCE_ALIASING_BARRIER, D3D12_RESOURCE_BARRIER,
-    D3D12_RESOURCE_BARRIER_0, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
-    D3D12_RESOURCE_BARRIER_FLAG_NONE, D3D12_RESOURCE_BARRIER_TYPE_ALIASING,
-    D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, D3D12_RESOURCE_BARRIER_TYPE_UAV, D3D12_RESOURCE_DESC,
-    D3D12_RESOURCE_DIMENSION_BUFFER, D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-    D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
-    D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_FLAG_NONE,
-    D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE,
-    D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_STATE_INDEX_BUFFER,
-    D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, D3D12_RESOURCE_STATE_PRESENT,
-    D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
-    D3D12_RESOURCE_STATES, D3D12_RESOURCE_TRANSITION_BARRIER, D3D12_RESOURCE_UAV_BARRIER,
-    D3D12_ROOT_DESCRIPTOR_TABLE, D3D12_ROOT_PARAMETER, D3D12_ROOT_PARAMETER_0,
-    D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE, D3D12_ROOT_SIGNATURE_DESC,
-    D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT, D3D12_SAMPLER_DESC,
-    D3D12_SHADER_BYTECODE, D3D12_SHADER_RESOURCE_VIEW_DESC, D3D12_SHADER_RESOURCE_VIEW_DESC_0,
-    D3D12_SHADER_VISIBILITY_ALL, D3D12_SHADER_VISIBILITY_PIXEL, D3D12_SHADER_VISIBILITY_VERTEX,
-    D3D12_SRV_DIMENSION_BUFFER, D3D12_STENCIL_OP_KEEP, D3D12_TEX2D_ARRAY_UAV, D3D12_TEX2D_UAV,
-    D3D12_TEXTURE_ADDRESS_MODE_CLAMP, D3D12_TEXTURE_ADDRESS_MODE_MIRROR,
-    D3D12_TEXTURE_ADDRESS_MODE_WRAP, D3D12_TEXTURE_COPY_LOCATION, D3D12_TEXTURE_COPY_LOCATION_0,
+    D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE, D3D12_QUERY_HEAP_DESC, D3D12_QUERY_HEAP_TYPE_TIMESTAMP,
+    D3D12_QUERY_TYPE_TIMESTAMP, D3D12_RANGE, D3D12_RASTERIZER_DESC, D3D12_RENDER_TARGET_BLEND_DESC,
+    D3D12_RESOURCE_ALIASING_BARRIER, D3D12_RESOURCE_BARRIER, D3D12_RESOURCE_BARRIER_0,
+    D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, D3D12_RESOURCE_BARRIER_FLAG_NONE,
+    D3D12_RESOURCE_BARRIER_TYPE_ALIASING, D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
+    D3D12_RESOURCE_BARRIER_TYPE_UAV, D3D12_RESOURCE_DESC, D3D12_RESOURCE_DIMENSION_BUFFER,
+    D3D12_RESOURCE_DIMENSION_TEXTURE2D, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL,
+    D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+    D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST,
+    D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_GENERIC_READ,
+    D3D12_RESOURCE_STATE_INDEX_BUFFER, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT,
+    D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET,
+    D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, D3D12_RESOURCE_STATES,
+    D3D12_RESOURCE_TRANSITION_BARRIER, D3D12_RESOURCE_UAV_BARRIER, D3D12_ROOT_DESCRIPTOR_TABLE,
+    D3D12_ROOT_PARAMETER, D3D12_ROOT_PARAMETER_0, D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
+    D3D12_ROOT_SIGNATURE_DESC, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
+    D3D12_SAMPLER_DESC, D3D12_SHADER_BYTECODE, D3D12_SHADER_RESOURCE_VIEW_DESC,
+    D3D12_SHADER_RESOURCE_VIEW_DESC_0, D3D12_SHADER_VISIBILITY_ALL, D3D12_SHADER_VISIBILITY_PIXEL,
+    D3D12_SHADER_VISIBILITY_VERTEX, D3D12_SRV_DIMENSION_BUFFER, D3D12_STENCIL_OP_KEEP,
+    D3D12_TEX2D_ARRAY_UAV, D3D12_TEX2D_UAV, D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+    D3D12_TEXTURE_ADDRESS_MODE_MIRROR, D3D12_TEXTURE_ADDRESS_MODE_WRAP,
+    D3D12_TEXTURE_COPY_LOCATION, D3D12_TEXTURE_COPY_LOCATION_0,
     D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
     D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_TEXTURE_LAYOUT_UNKNOWN, D3D12_UAV_DIMENSION_BUFFER,
     D3D12_UAV_DIMENSION_TEXTURE2D, D3D12_UAV_DIMENSION_TEXTURE2DARRAY,
     D3D12_UNORDERED_ACCESS_VIEW_DESC, D3D12_UNORDERED_ACCESS_VIEW_DESC_0, D3D12_VERTEX_BUFFER_VIEW,
     D3D12CreateDevice, D3D12SerializeRootSignature, ID3D12CommandAllocator, ID3D12CommandQueue,
     ID3D12CommandSignature, ID3D12DescriptorHeap, ID3D12Device, ID3D12Fence,
-    ID3D12GraphicsCommandList, ID3D12Heap, ID3D12PipelineState, ID3D12Resource,
+    ID3D12GraphicsCommandList, ID3D12Heap, ID3D12PipelineState, ID3D12QueryHeap, ID3D12Resource,
     ID3D12RootSignature,
 };
 #[cfg(debug_assertions)]
@@ -88,11 +90,12 @@ use windows::Win32::Graphics::Dxgi::Common::{
 };
 use windows::Win32::Graphics::Dxgi::{
     CreateDXGIFactory2, DXGI_ADAPTER_FLAG_SOFTWARE, DXGI_CREATE_FACTORY_FLAGS,
-    DXGI_MEMORY_SEGMENT_GROUP_LOCAL, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, DXGI_PRESENT,
+    DXGI_FEATURE_PRESENT_ALLOW_TEARING, DXGI_MEMORY_SEGMENT_GROUP_LOCAL,
+    DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, DXGI_PRESENT, DXGI_PRESENT_ALLOW_TEARING,
     DXGI_QUERY_VIDEO_MEMORY_INFO, DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1,
-    DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT, DXGI_SWAP_EFFECT_FLIP_DISCARD,
-    DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIAdapter1, IDXGIAdapter3, IDXGIFactory4, IDXGISwapChain2,
-    IDXGISwapChain3,
+    DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING, DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT,
+    DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIAdapter1, IDXGIAdapter3,
+    IDXGIFactory4, IDXGIFactory5, IDXGISwapChain2, IDXGISwapChain3,
 };
 use windows::Win32::System::Threading::{CreateEventW, INFINITE, WaitForSingleObject};
 use windows::core::Interface;
@@ -118,6 +121,30 @@ struct FrameResources {
     allocator: ID3D12CommandAllocator,
     fence_value: u64,
     upload: MappedUploadArena,
+}
+
+struct GpuProfileCapture {
+    heap: ID3D12QueryHeap,
+    readback: ID3D12Resource,
+    capacity: u32,
+    names: Vec<String>,
+    written: u32,
+    fence_value: u64,
+}
+
+struct GpuProfiler {
+    frequency: u64,
+    active: Option<GpuProfileCapture>,
+    pending: Vec<GpuProfileCapture>,
+    reusable: Vec<GpuProfileCapture>,
+    samples: Vec<crate::GpuFrameTiming>,
+}
+
+struct RetiredResources {
+    fence_value: u64,
+    resources: Vec<ID3D12Resource>,
+    descriptors: Vec<DescriptorHandle>,
+    allocations: Vec<Allocation>,
 }
 
 #[derive(Clone)]
@@ -154,6 +181,7 @@ enum NativeViewKind {
 struct NativePipeline {
     root_signature: ID3D12RootSignature,
     pipeline_state: ID3D12PipelineState,
+    expected_bindings: Arc<[RootBindingKey]>,
 }
 
 enum PendingGraphBarrier {
@@ -163,7 +191,7 @@ enum PendingGraphBarrier {
 }
 
 pub(crate) struct RecordedBarrierPass {
-    _allocator: ID3D12CommandAllocator,
+    allocator: ID3D12CommandAllocator,
     list: ID3D12GraphicsCommandList,
     state_updates: Vec<(usize, D3D12_RESOURCE_STATES)>,
 }
@@ -334,11 +362,13 @@ pub(crate) struct D3d12Renderer {
     next_frame_slot: usize,
     next_fence_value: u64,
     vertical_sync: bool,
+    allow_tearing: bool,
     width: u32,
     height: u32,
     suspended: bool,
     heaps: Vec<Option<NativeHeapBlock>>,
     resources: Vec<NativeResourceSlot>,
+    descriptor_owners: Arc<HashMap<DescriptorHandle, (GpuResourceHandle, NativeViewKind)>>,
     free_resource_slots: Vec<u32>,
     resource_descriptor_heap: ID3D12DescriptorHeap,
     sampler_descriptor_heap: ID3D12DescriptorHeap,
@@ -351,6 +381,10 @@ pub(crate) struct D3d12Renderer {
     indexed_draw_command_signature: ID3D12CommandSignature,
     graph_submission_active: bool,
     inflight_pass_lists: Vec<(ID3D12CommandAllocator, ID3D12GraphicsCommandList)>,
+    retired_pass_lists: Vec<(u64, Vec<(ID3D12CommandAllocator, ID3D12GraphicsCommandList)>)>,
+    reusable_pass_lists: Arc<Mutex<Vec<(ID3D12CommandAllocator, ID3D12GraphicsCommandList)>>>,
+    retired_resources: Vec<RetiredResources>,
+    gpu_profiler: Option<GpuProfiler>,
     record_only: bool,
 }
 
@@ -372,11 +406,13 @@ impl D3d12Renderer {
             next_frame_slot: 0,
             next_fence_value: self.next_fence_value,
             vertical_sync: self.vertical_sync,
+            allow_tearing: self.allow_tearing,
             width: self.width,
             height: self.height,
             suspended: self.suspended,
             heaps: self.heaps.clone(),
             resources: self.resources.clone(),
+            descriptor_owners: Arc::clone(&self.descriptor_owners),
             free_resource_slots: self.free_resource_slots.clone(),
             resource_descriptor_heap: self.resource_descriptor_heap.clone(),
             sampler_descriptor_heap: self.sampler_descriptor_heap.clone(),
@@ -389,6 +425,10 @@ impl D3d12Renderer {
             indexed_draw_command_signature: self.indexed_draw_command_signature.clone(),
             graph_submission_active: true,
             inflight_pass_lists: Vec::new(),
+            retired_pass_lists: Vec::new(),
+            reusable_pass_lists: Arc::clone(&self.reusable_pass_lists),
+            retired_resources: Vec::new(),
+            gpu_profiler: None,
             record_only: true,
         }
     }
@@ -608,15 +648,13 @@ impl D3d12Renderer {
         handles: &[GpuResourceHandle],
         allocation: Allocation,
     ) -> Result<(), RenderError> {
-        self.wait_idle()?;
-        for &handle in handles {
-            self.destroy_resource(services, handle)?;
-        }
-        if !services.allocator().deallocate(allocation) {
-            return Err(RenderError::Backend(
-                "transient alias allocation bookkeeping was inconsistent".into(),
-            ));
-        }
+        self.destroy_resources(services, handles)?;
+        self.retired_resources.push(RetiredResources {
+            fence_value: self.next_fence_value.saturating_sub(1),
+            resources: Vec::new(),
+            descriptors: Vec::new(),
+            allocations: vec![allocation],
+        });
         Ok(())
     }
 
@@ -686,36 +724,60 @@ impl D3d12Renderer {
         services: &mut RenderServices,
         handle: GpuResourceHandle,
     ) -> Result<(), RenderError> {
-        self.wait_idle()?;
-        let Some(slot) = self.resources.get_mut(handle.index() as usize) else {
-            return Err(RenderError::Backend("GPU resource handle index is invalid".into()));
-        };
-        if slot.generation != handle.generation()
-            || slot.kind != handle.kind()
-            || slot.resource.is_none()
-        {
-            return Err(RenderError::Backend(
-                "GPU resource handle is stale or has the wrong kind".into(),
-            ));
+        self.destroy_resources(services, &[handle])
+    }
+
+    pub(crate) fn destroy_resources(
+        &mut self,
+        services: &mut RenderServices,
+        handles: &[GpuResourceHandle],
+    ) -> Result<(), RenderError> {
+        if handles.is_empty() {
+            return Ok(());
         }
-        for (descriptor, _) in std::mem::take(&mut slot.descriptors) {
-            if !services.descriptors().release(descriptor) {
+        let mut unique = HashSet::with_capacity(handles.len());
+        for &handle in handles {
+            if !unique.insert(handle) {
                 return Err(RenderError::Backend(
-                    "GPU descriptor handle was stale during resource destruction".into(),
+                    "GPU resource batch contains a duplicate handle".into(),
+                ));
+            }
+            let Some(slot) = self.resources.get(handle.index() as usize) else {
+                return Err(RenderError::Backend("GPU resource handle index is invalid".into()));
+            };
+            if slot.generation != handle.generation()
+                || slot.kind != handle.kind()
+                || slot.resource.is_none()
+            {
+                return Err(RenderError::Backend(
+                    "GPU resource handle is stale or has the wrong kind".into(),
                 ));
             }
         }
-        slot.resource.take();
-        if let Some(allocation) = slot.allocation.take()
-            && !services.allocator().deallocate(allocation)
-        {
-            return Err(RenderError::Backend(
-                "GPU resource allocation bookkeeping was inconsistent".into(),
-            ));
+        self.reap_retired_resources(services)?;
+        let mut retired = RetiredResources {
+            fence_value: self.next_fence_value.saturating_sub(1),
+            resources: Vec::with_capacity(handles.len()),
+            descriptors: Vec::new(),
+            allocations: Vec::new(),
+        };
+        for handle in handles {
+            let slot = &mut self.resources[handle.index() as usize];
+            for (descriptor, _) in std::mem::take(&mut slot.descriptors) {
+                Arc::make_mut(&mut self.descriptor_owners).remove(&descriptor);
+                retired.descriptors.push(descriptor);
+            }
+            if let Some(resource) = slot.resource.take() {
+                retired.resources.push(resource);
+            }
+            if let Some(allocation) = slot.allocation.take() {
+                retired.allocations.push(allocation);
+            }
+            slot.generation =
+                NonZeroU32::new(slot.generation.get().wrapping_add(1)).unwrap_or(NonZeroU32::MIN);
+            self.free_resource_slots.push(handle.index());
         }
-        slot.generation =
-            NonZeroU32::new(slot.generation.get().wrapping_add(1)).unwrap_or(NonZeroU32::MIN);
-        self.free_resource_slots.push(handle.index());
+        self.retired_resources.push(retired);
         Ok(())
     }
 
@@ -748,6 +810,8 @@ impl D3d12Renderer {
         self.resources[handle.index() as usize]
             .descriptors
             .push((descriptor, NativeViewKind::ShaderResource));
+        Arc::make_mut(&mut self.descriptor_owners)
+            .insert(descriptor, (handle, NativeViewKind::ShaderResource));
         Ok(descriptor)
     }
 
@@ -795,6 +859,8 @@ impl D3d12Renderer {
         self.resources[handle.index() as usize]
             .descriptors
             .push((descriptor, NativeViewKind::ShaderResource));
+        Arc::make_mut(&mut self.descriptor_owners)
+            .insert(descriptor, (handle, NativeViewKind::ShaderResource));
         Ok(descriptor)
     }
 
@@ -838,6 +904,8 @@ impl D3d12Renderer {
             self.resources[handle.index() as usize]
                 .descriptors
                 .push((*descriptor, NativeViewKind::ShaderResource));
+            Arc::make_mut(&mut self.descriptor_owners)
+                .insert(*descriptor, (*handle, NativeViewKind::ShaderResource));
         }
         Ok(descriptors)
     }
@@ -878,6 +946,8 @@ impl D3d12Renderer {
         self.resources[handle.index() as usize]
             .descriptors
             .push((descriptor, NativeViewKind::ConstantBuffer));
+        Arc::make_mut(&mut self.descriptor_owners)
+            .insert(descriptor, (handle, NativeViewKind::ConstantBuffer));
         Ok(descriptor)
     }
 
@@ -928,6 +998,8 @@ impl D3d12Renderer {
             self.resources[handle.index() as usize]
                 .descriptors
                 .push((*descriptor, NativeViewKind::ConstantBuffer));
+            Arc::make_mut(&mut self.descriptor_owners)
+                .insert(*descriptor, (*handle, NativeViewKind::ConstantBuffer));
         }
         Ok(descriptors)
     }
@@ -962,6 +1034,8 @@ impl D3d12Renderer {
         self.resources[handle.index() as usize]
             .descriptors
             .push((descriptor, NativeViewKind::UnorderedAccess));
+        Arc::make_mut(&mut self.descriptor_owners)
+            .insert(descriptor, (handle, NativeViewKind::UnorderedAccess));
         Ok(descriptor)
     }
 
@@ -1006,6 +1080,8 @@ impl D3d12Renderer {
             self.resources[handle.index() as usize]
                 .descriptors
                 .push((*descriptor, NativeViewKind::UnorderedAccess));
+            Arc::make_mut(&mut self.descriptor_owners)
+                .insert(*descriptor, (*handle, NativeViewKind::UnorderedAccess));
         }
         Ok(descriptors)
     }
@@ -1040,6 +1116,8 @@ impl D3d12Renderer {
         self.resources[handle.index() as usize]
             .descriptors
             .push((descriptor, NativeViewKind::RenderTarget));
+        Arc::make_mut(&mut self.descriptor_owners)
+            .insert(descriptor, (handle, NativeViewKind::RenderTarget));
         Ok(descriptor)
     }
 
@@ -1071,6 +1149,8 @@ impl D3d12Renderer {
         self.resources[handle.index() as usize]
             .descriptors
             .push((descriptor, NativeViewKind::DepthStencil));
+        Arc::make_mut(&mut self.descriptor_owners)
+            .insert(descriptor, (handle, NativeViewKind::DepthStencil));
         Ok(descriptor)
     }
 
@@ -1149,6 +1229,7 @@ impl D3d12Renderer {
         for resource in &mut self.resources {
             resource.descriptors.retain(|(owned, _)| *owned != descriptor);
         }
+        Arc::make_mut(&mut self.descriptor_owners).remove(&descriptor);
         Ok(())
     }
 
@@ -1175,7 +1256,7 @@ impl D3d12Renderer {
         if self.pipelines.contains_key(&key) {
             return services.pipelines().get_or_insert(description, frame).map_err(backend_error);
         }
-        let (_descriptor_ranges, root_parameters, _binding_keys) =
+        let (_descriptor_ranges, root_parameters, binding_keys) =
             root_signature_parts(&[(vertex, 1), (pixel, 2)])?;
         let root_desc = D3D12_ROOT_SIGNATURE_DESC {
             NumParameters: u32::try_from(root_parameters.len()).map_err(backend_error)?,
@@ -1230,8 +1311,7 @@ impl D3d12Renderer {
                         D3D12_BLEND_ZERO
                     }
                 }
-                BlendMode::Alpha => D3D12_BLEND_ZERO,
-                BlendMode::InvertDestinationColor => D3D12_BLEND_ZERO,
+                BlendMode::Alpha | BlendMode::InvertDestinationColor => D3D12_BLEND_ZERO,
                 BlendMode::HighContrastInvert => D3D12_BLEND_ONE,
                 BlendMode::AdaptiveLight => D3D12_BLEND_SRC_ALPHA,
             },
@@ -1351,7 +1431,14 @@ impl D3d12Renderer {
             self.device.CreateGraphicsPipelineState::<ID3D12PipelineState>(&raw const native)
         }
         .map_err(backend_error)?;
-        self.pipelines.insert(key, NativePipeline { root_signature, pipeline_state: state });
+        self.pipelines.insert(
+            key,
+            NativePipeline {
+                root_signature,
+                pipeline_state: state,
+                expected_bindings: binding_keys.into(),
+            },
+        );
         services.pipelines().get_or_insert(description, frame).map_err(backend_error)
     }
 
@@ -1372,7 +1459,7 @@ impl D3d12Renderer {
                 .pipelines()
                 .get_or_insert_compute(description.compute_shader, frame));
         }
-        let (_descriptor_ranges, root_parameters, _binding_keys) =
+        let (_descriptor_ranges, root_parameters, binding_keys) =
             root_signature_parts(&[(shader, 4)])?;
         let root_desc = D3D12_ROOT_SIGNATURE_DESC {
             NumParameters: u32::try_from(root_parameters.len()).map_err(backend_error)?,
@@ -1414,7 +1501,11 @@ impl D3d12Renderer {
         .map_err(backend_error)?;
         self.compute_pipelines.insert(
             description.compute_shader,
-            NativePipeline { root_signature, pipeline_state: state },
+            NativePipeline {
+                root_signature,
+                pipeline_state: state,
+                expected_bindings: binding_keys.into(),
+            },
         );
         Ok(services.pipelines().get_or_insert_compute(description.compute_shader, frame))
     }
@@ -1494,7 +1585,7 @@ impl D3d12Renderer {
                 || slot.desc.Flags.contains(D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL)
                 || !slot.desc.Flags.contains(D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET)
                 || attachment.view.kind() != DescriptorKind::RenderTarget
-                || !services.descriptors().is_live(attachment.view)
+                || !services.descriptor_is_live(attachment.view)
                 || self.descriptor_owner(attachment.view)
                     != Some((attachment.resource, NativeViewKind::RenderTarget))
             {
@@ -1530,7 +1621,7 @@ impl D3d12Renderer {
                         DXGI_FORMAT_D32_FLOAT | DXGI_FORMAT_D24_UNORM_S8_UINT
                     )
                     || view.kind() != DescriptorKind::DepthStencil
-                    || !services.descriptors().is_live(view)
+                    || !services.descriptor_is_live(view)
                     || self.descriptor_owner(view) != Some((resource, NativeViewKind::DepthStencil))
                 {
                     return Err(RenderError::Backend(
@@ -1546,8 +1637,14 @@ impl D3d12Renderer {
         let mut prepared = Vec::with_capacity(pass.draws.len());
         let mut uses_samplers = false;
         for draw in &pass.draws {
-            draw.description.validate().map_err(|error| {
-                RenderError::Backend(format!("invalid graphics pipeline description: {error}"))
+            // Every native pipeline is validated before it is inserted into
+            // this cache. Finding the exact immutable description here proves
+            // validation already succeeded, so repeating the allocation-heavy
+            // vertex-layout checks once per draw only adds hot-path overhead.
+            let pipeline = self.pipelines.get(&draw.description).ok_or_else(|| {
+                RenderError::Backend(
+                    "graphics pipeline must be created before pass execution".into(),
+                )
             })?;
             if draw.vertex.shader_id != draw.description.vertex_shader
                 || draw.pixel.shader_id != draw.description.pixel_shader
@@ -1558,10 +1655,11 @@ impl D3d12Renderer {
                     "draw shaders do not match the graphics pipeline".into(),
                 ));
             }
-            let pipeline_color_formats =
-                draw.description.color_formats().map(dxgi_format).collect::<Vec<_>>();
-            let pass_color_formats = color_descs.iter().map(|desc| desc.Format).collect::<Vec<_>>();
-            if pipeline_color_formats != pass_color_formats
+            if !draw
+                .description
+                .color_formats()
+                .map(dxgi_format)
+                .eq(color_descs.iter().map(|desc| desc.Format))
                 || color_desc.SampleDesc.Count != u32::from(draw.description.sample_count)
                 || draw.description.depth_format.map(dxgi_format)
                     != depth_resource.map(|resource| {
@@ -1575,16 +1673,11 @@ impl D3d12Renderer {
                     "graphics pipeline formats do not match the pass attachments".into(),
                 ));
             }
-            let key = PipelineKey(draw.description.clone());
-            let pipeline = self.pipelines.get(&key).ok_or_else(|| {
-                RenderError::Backend(
-                    "graphics pipeline must be created before pass execution".into(),
-                )
-            })?;
-            let (root_signature, pipeline_state) =
-                (pipeline.root_signature.clone(), pipeline.pipeline_state.clone());
-            let (_, _, expected_bindings) =
-                root_signature_parts(&[(&draw.vertex, 1), (&draw.pixel, 2)])?;
+            let (root_signature, pipeline_state, expected_bindings) = (
+                pipeline.root_signature.clone(),
+                pipeline.pipeline_state.clone(),
+                Arc::clone(&pipeline.expected_bindings),
+            );
             if draw.bindings.len() != expected_bindings.len() {
                 return Err(RenderError::Backend(
                     "draw must bind every reflected descriptor exactly once".into(),
@@ -1607,7 +1700,7 @@ impl D3d12Renderer {
                     || !is_contiguous_descriptor_range(&binding.descriptors)
                     || binding.descriptors.iter().any(|descriptor| {
                         descriptor.kind() != expected_kind
-                            || !services.descriptors().is_live(*descriptor)
+                            || !services.descriptor_is_live(*descriptor)
                     })
                 {
                     return Err(RenderError::Backend(
@@ -1633,15 +1726,15 @@ impl D3d12Renderer {
                 uses_samplers |= kind == ShaderBindingKind::Sampler;
             }
 
-            let layout_slots = draw
-                .description
-                .vertex_attributes
-                .iter()
-                .map(|attribute| attribute.input_slot)
-                .collect::<HashSet<_>>();
-            let bound_slots =
-                draw.vertex_buffers.iter().map(|binding| binding.slot).collect::<HashSet<_>>();
-            if layout_slots != bound_slots {
+            if draw.description.vertex_attributes.iter().any(|attribute| {
+                !draw.vertex_buffers.iter().any(|binding| binding.slot == attribute.input_slot)
+            }) || draw.vertex_buffers.iter().any(|binding| {
+                !draw
+                    .description
+                    .vertex_attributes
+                    .iter()
+                    .any(|attribute| attribute.input_slot == binding.slot)
+            }) {
                 return Err(RenderError::Backend(
                     "vertex buffer slots must exactly match the pipeline input layout".into(),
                 ));
@@ -1817,13 +1910,7 @@ impl D3d12Renderer {
         if !self.graph_submission_active && !self.record_only {
             self.wait_idle()?;
         }
-        let allocator: ID3D12CommandAllocator =
-            unsafe { self.device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT) }
-                .map_err(backend_error)?;
-        let list: ID3D12GraphicsCommandList = unsafe {
-            self.device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator, None)
-        }
-        .map_err(backend_error)?;
+        let (allocator, list) = acquire_pass_list(&self.device, &self.reusable_pass_lists)?;
         for (resource, before) in color_resources.iter().zip(&color_states) {
             if *before != D3D12_RESOURCE_STATE_RENDER_TARGET {
                 record_transition(&list, resource, *before, D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -2075,14 +2162,19 @@ impl D3d12Renderer {
         {
             return Err(RenderError::Backend("compute shader does not match the pipeline".into()));
         }
-        let (root_signature, pipeline_state) = self
+        let (root_signature, pipeline_state, expected_bindings) = self
             .compute_pipelines
             .get(&description.compute_shader)
-            .map(|pipeline| (pipeline.root_signature.clone(), pipeline.pipeline_state.clone()))
+            .map(|pipeline| {
+                (
+                    pipeline.root_signature.clone(),
+                    pipeline.pipeline_state.clone(),
+                    Arc::clone(&pipeline.expected_bindings),
+                )
+            })
             .ok_or_else(|| {
                 RenderError::Backend("compute pipeline must be created before dispatch".into())
             })?;
-        let (_, _, expected_bindings) = root_signature_parts(&[(compute, 4)])?;
         if bindings.len() != expected_bindings.len() {
             return Err(RenderError::Backend(
                 "compute dispatch must bind every reflected descriptor exactly once".into(),
@@ -2109,7 +2201,7 @@ impl D3d12Renderer {
                 || !is_contiguous_descriptor_range(&binding.descriptors)
                 || binding.descriptors.iter().any(|descriptor| {
                     descriptor.kind() != descriptor_kind
-                        || !services.descriptors().is_live(*descriptor)
+                        || !services.descriptor_is_live(*descriptor)
                 })
             {
                 return Err(RenderError::Backend(
@@ -2147,16 +2239,10 @@ impl D3d12Renderer {
                 }
             }
         }
-        if !self.graph_submission_active {
+        if !self.graph_submission_active && !self.record_only {
             self.wait_idle()?;
         }
-        let allocator: ID3D12CommandAllocator =
-            unsafe { self.device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT) }
-                .map_err(backend_error)?;
-        let list: ID3D12GraphicsCommandList = unsafe {
-            self.device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator, None)
-        }
-        .map_err(backend_error)?;
+        let (allocator, list) = acquire_pass_list(&self.device, &self.reusable_pass_lists)?;
         for (_, resource, before) in &transitions {
             if *before
                 != windows::Win32::Graphics::Direct3D12::D3D12_RESOURCE_STATE_UNORDERED_ACCESS
@@ -2703,68 +2789,68 @@ impl D3d12Renderer {
         }
 
         let device = self.device.clone();
-        let recorded = job_system
-            .map_owned(jobs, move |(pass_index, barriers, state_updates)| {
-                if barriers.is_empty() {
-                    return Ok((pass_index, None));
-                }
-                let allocator: ID3D12CommandAllocator =
-                    unsafe { device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT) }
-                        .map_err(backend_error)?;
-                let list: ID3D12GraphicsCommandList = unsafe {
-                    device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator, None)
-                }
-                .map_err(backend_error)?;
-                let mut native = barriers
-                    .into_iter()
-                    .map(|barrier| match barrier {
-                        PendingGraphBarrier::Transition(resource, before, after) => {
-                            transition(&resource, before, after)
-                        }
-                        PendingGraphBarrier::Uav(resource) => uav_barrier(&resource),
-                        PendingGraphBarrier::Aliasing(before, after) => D3D12_RESOURCE_BARRIER {
-                            Type: D3D12_RESOURCE_BARRIER_TYPE_ALIASING,
-                            Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
-                            Anonymous: D3D12_RESOURCE_BARRIER_0 {
-                                Aliasing: ManuallyDrop::new(D3D12_RESOURCE_ALIASING_BARRIER {
-                                    pResourceBefore: ManuallyDrop::new(before),
-                                    pResourceAfter: ManuallyDrop::new(Some(after)),
-                                }),
-                            },
-                        },
-                    })
-                    .collect::<Vec<_>>();
-                // SAFETY: this pool task owns a unique allocator/list pair and
-                // all COM resources in the barrier descriptors stay alive.
-                unsafe {
-                    list.ResourceBarrier(&native);
-                    for barrier in &mut native {
-                        match barrier.Type {
-                            D3D12_RESOURCE_BARRIER_TYPE_TRANSITION => {
-                                let transition = &mut barrier.Anonymous.Transition;
-                                drop(ManuallyDrop::take(&mut transition.pResource));
-                            }
-                            D3D12_RESOURCE_BARRIER_TYPE_UAV => {
-                                let uav = &mut barrier.Anonymous.UAV;
-                                drop(ManuallyDrop::take(&mut uav.pResource));
-                            }
-                            D3D12_RESOURCE_BARRIER_TYPE_ALIASING => {
-                                let aliasing = &mut barrier.Anonymous.Aliasing;
-                                drop(ManuallyDrop::take(&mut aliasing.pResourceBefore));
-                                drop(ManuallyDrop::take(&mut aliasing.pResourceAfter));
-                            }
-                            _ => unreachable!(),
-                        }
+        let reusable = Arc::clone(&self.reusable_pass_lists);
+        let record = move |(pass_index, barriers, state_updates): (
+            usize,
+            Vec<PendingGraphBarrier>,
+            Vec<(usize, D3D12_RESOURCE_STATES)>,
+        )| {
+            if barriers.is_empty() {
+                return Ok((pass_index, None));
+            }
+            let (allocator, list) = acquire_pass_list(&device, &reusable)?;
+            let mut native = barriers
+                .into_iter()
+                .map(|barrier| match barrier {
+                    PendingGraphBarrier::Transition(resource, before, after) => {
+                        transition(&resource, before, after)
                     }
-                    list.Close().map_err(backend_error)?;
+                    PendingGraphBarrier::Uav(resource) => uav_barrier(&resource),
+                    PendingGraphBarrier::Aliasing(before, after) => D3D12_RESOURCE_BARRIER {
+                        Type: D3D12_RESOURCE_BARRIER_TYPE_ALIASING,
+                        Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
+                        Anonymous: D3D12_RESOURCE_BARRIER_0 {
+                            Aliasing: ManuallyDrop::new(D3D12_RESOURCE_ALIASING_BARRIER {
+                                pResourceBefore: ManuallyDrop::new(before),
+                                pResourceAfter: ManuallyDrop::new(Some(after)),
+                            }),
+                        },
+                    },
+                })
+                .collect::<Vec<_>>();
+            // SAFETY: this pool task owns a unique allocator/list pair and
+            // all COM resources in the barrier descriptors stay alive.
+            unsafe {
+                list.ResourceBarrier(&native);
+                for barrier in &mut native {
+                    match barrier.Type {
+                        D3D12_RESOURCE_BARRIER_TYPE_TRANSITION => {
+                            let transition = &mut barrier.Anonymous.Transition;
+                            drop(ManuallyDrop::take(&mut transition.pResource));
+                        }
+                        D3D12_RESOURCE_BARRIER_TYPE_UAV => {
+                            let uav = &mut barrier.Anonymous.UAV;
+                            drop(ManuallyDrop::take(&mut uav.pResource));
+                        }
+                        D3D12_RESOURCE_BARRIER_TYPE_ALIASING => {
+                            let aliasing = &mut barrier.Anonymous.Aliasing;
+                            drop(ManuallyDrop::take(&mut aliasing.pResourceBefore));
+                            drop(ManuallyDrop::take(&mut aliasing.pResourceAfter));
+                        }
+                        _ => unreachable!(),
+                    }
                 }
-                Ok((
-                    pass_index,
-                    Some(RecordedBarrierPass { _allocator: allocator, list, state_updates }),
-                ))
-            })
-            .into_iter()
-            .collect::<Result<Vec<_>, RenderError>>()?;
+                list.Close().map_err(backend_error)?;
+            }
+            Ok((pass_index, Some(RecordedBarrierPass { allocator, list, state_updates })))
+        };
+        let recorded = if jobs.len() <= 4 {
+            jobs.into_iter().map(record).collect::<Vec<_>>()
+        } else {
+            job_system.map_owned(jobs, record)
+        }
+        .into_iter()
+        .collect::<Result<Vec<_>, RenderError>>()?;
         // Preserve each pass's exact slot (including passes with no barriers),
         // regardless of the worker-pool completion order.
         let mut passes =
@@ -2780,16 +2866,15 @@ impl D3d12Renderer {
         recorded: &mut RecordedGraphBarriers,
         pass_index: usize,
     ) -> Result<(), RenderError> {
-        let Some(Some(pass)) = recorded.passes.get_mut(pass_index) else { return Ok(()) };
-        // SAFETY: list was closed after recording and targets this renderer's direct queue.
-        unsafe {
-            self.queue.ExecuteCommandLists(&[Some(pass.list.cast().map_err(backend_error)?)]);
-        }
-        for &(index, state) in &pass.state_updates {
+        let Some(Some(pass)) = recorded.passes.get_mut(pass_index).map(Option::take) else {
+            return Ok(());
+        };
+        for (index, state) in pass.state_updates {
             if let Some(slot) = self.resources.get_mut(index) {
                 slot.state = state;
             }
         }
+        self.submit_pass_command_list(pass.allocator, pass.list)?;
         Ok(())
     }
 
@@ -2810,6 +2895,69 @@ impl D3d12Renderer {
                     RenderError::Backend("render command buffer has no compiled graph pass".into())
                 })?;
             self.validate_graph_descriptor_accesses(pass, &buffer.commands, transients, services)?;
+        }
+        if buffers.len() <= 4 {
+            let mut renderer = self.recording_snapshot();
+            let mut recording_services = services.recording_snapshot();
+            let mut passes =
+                std::iter::repeat_with(Vec::new).take(buffers.len()).collect::<Vec<_>>();
+            for (pass_index, buffer) in buffers.iter().enumerate() {
+                let pass =
+                    graph.passes().iter().find(|pass| pass.id.index() == pass_index).ok_or_else(
+                        || {
+                            RenderError::Backend(
+                                "render command buffer has no compiled graph pass".into(),
+                            )
+                        },
+                    )?;
+                for barrier in &pass.barriers_before {
+                    let handle = resolve_graph_resource(barrier.resource, transients)?;
+                    if let Some(slot) = renderer.resources.get_mut(handle.index() as usize) {
+                        match barrier.kind {
+                            RenderBarrierKind::Transition => {
+                                slot.state = if slot.buffer_memory == Some(BufferMemory::Upload) {
+                                    D3D12_RESOURCE_STATE_GENERIC_READ
+                                } else {
+                                    graph_resource_state(barrier.after)
+                                };
+                            }
+                            RenderBarrierKind::Aliasing => {
+                                slot.state = D3D12_RESOURCE_STATE_COMMON;
+                            }
+                            RenderBarrierKind::UavOrdering => {}
+                        }
+                    }
+                }
+                let first_list = renderer.inflight_pass_lists.len();
+                for command in &buffer.commands {
+                    match command {
+                        crate::render_graph::EncodedRenderCommand::Graphics(pass) => {
+                            renderer.execute_graphics_pass_batch(&mut recording_services, pass)?;
+                        }
+                        crate::render_graph::EncodedRenderCommand::Compute {
+                            description,
+                            compute,
+                            bindings,
+                            groups,
+                        } => renderer.execute_compute_pass(
+                            &mut recording_services,
+                            *description,
+                            compute,
+                            bindings,
+                            *groups,
+                        )?,
+                        crate::render_graph::EncodedRenderCommand::ComputeTransientUav {
+                            ..
+                        } => {
+                            return Err(RenderError::Backend(
+                                "transient UAV command was not resolved before recording".into(),
+                            ));
+                        }
+                    }
+                }
+                passes[pass_index] = renderer.inflight_pass_lists.drain(first_list..).collect();
+            }
+            return Ok(RecordedGraphCommands { passes });
         }
         let jobs = buffers
             .iter()
@@ -2872,12 +3020,9 @@ impl D3d12Renderer {
     ) -> Result<(), RenderError> {
         let Some(commands) = recorded.passes.get_mut(pass_index) else { return Ok(()) };
         for (allocator, list) in std::mem::take(commands) {
-            // SAFETY: the list is closed, device-owned, and submitted in graph order.
-            unsafe {
-                self.queue.ExecuteCommandLists(&[Some(list.cast().map_err(backend_error)?)]);
-            }
-            self.inflight_pass_lists.push((allocator, list));
+            self.submit_pass_command_list(allocator, list)?;
         }
+        self.record_gpu_timestamp()?;
         Ok(())
     }
 
@@ -2922,14 +3067,7 @@ impl D3d12Renderer {
         &self,
         descriptor: DescriptorHandle,
     ) -> Option<(GpuResourceHandle, NativeViewKind)> {
-        self.resources.iter().enumerate().find_map(|(index, slot)| {
-            slot.resource.as_ref()?;
-            let (_, view) = slot.descriptors.iter().find(|(owned, _)| *owned == descriptor)?;
-            Some((
-                GpuResourceHandle::new(u32::try_from(index).ok()?, slot.generation, slot.kind),
-                *view,
-            ))
-        })
+        self.descriptor_owners.get(&descriptor).copied()
     }
 
     fn validate_graph_descriptor_accesses(
@@ -3081,39 +3219,75 @@ impl D3d12Renderer {
         destination_offset: u64,
         bytes: &[u8],
     ) -> Result<(), RenderError> {
-        let slot = self.validate_resource(handle)?;
-        if slot.kind != ResourceKind::Buffer
-            || slot.buffer_memory != Some(BufferMemory::DeviceLocal)
-        {
-            return Err(RenderError::Backend(
-                "staged buffer uploads require a device-local buffer".into(),
-            ));
-        }
-        if !destination_offset.is_multiple_of(4) || !bytes.len().is_multiple_of(4) {
-            return Err(RenderError::Backend(
-                "D3D12 buffer copy offset and size must be multiples of four bytes".into(),
-            ));
-        }
-        let end = destination_offset
-            .checked_add(bytes.len() as u64)
-            .ok_or_else(|| RenderError::Backend("buffer upload range overflowed".into()))?;
-        if end > slot.byte_size {
-            return Err(RenderError::Backend("buffer upload exceeds the resource bounds".into()));
-        }
-        if bytes.is_empty() {
+        self.upload_buffers(&[(handle, destination_offset, bytes)])
+    }
+
+    /// Upload many static buffers in one command list and one fence wait.
+    pub(crate) fn upload_buffers(
+        &mut self,
+        uploads: &[(GpuResourceHandle, u64, &[u8])],
+    ) -> Result<(), RenderError> {
+        if uploads.is_empty() {
             return Ok(());
         }
-        let resource = slot.resource.as_ref().expect("validated live resource").clone();
-        let before = slot.state;
-        self.wait_idle()?;
-        let mut staging = MappedUploadArena::new(&self.device, bytes.len().max(4))?;
-        let source = staging.allocate(bytes.len(), 4).ok_or_else(|| {
-            RenderError::Backend("buffer upload staging allocation failed".into())
-        })?;
-        // SAFETY: staging memory is mapped and the requested slice is in bounds.
-        unsafe {
-            std::ptr::copy_nonoverlapping(bytes.as_ptr(), source.as_ptr(), bytes.len());
+        let mut total_size = 0_usize;
+        let mut pending = Vec::with_capacity(uploads.len());
+        for &(handle, destination_offset, bytes) in uploads {
+            if bytes.is_empty() {
+                continue;
+            }
+            let slot = self.validate_resource(handle)?;
+            if slot.kind != ResourceKind::Buffer
+                || slot.buffer_memory != Some(BufferMemory::DeviceLocal)
+            {
+                return Err(RenderError::Backend(
+                    "staged buffer uploads require device-local buffers".into(),
+                ));
+            }
+            if !destination_offset.is_multiple_of(4) || !bytes.len().is_multiple_of(4) {
+                return Err(RenderError::Backend(
+                    "D3D12 buffer copy offset and size must be multiples of four bytes".into(),
+                ));
+            }
+            let end = destination_offset
+                .checked_add(bytes.len() as u64)
+                .ok_or_else(|| RenderError::Backend("buffer upload range overflowed".into()))?;
+            if end > slot.byte_size {
+                return Err(RenderError::Backend(
+                    "buffer upload exceeds the resource bounds".into(),
+                ));
+            }
+            total_size = total_size.checked_add(bytes.len()).ok_or_else(|| {
+                RenderError::Backend("combined buffer upload size overflowed".into())
+            })?;
+            pending.push((
+                slot.resource.as_ref().expect("validated live resource").clone(),
+                destination_offset,
+                bytes,
+                slot.state,
+            ));
         }
+        if pending.is_empty() {
+            return Ok(());
+        }
+
+        let mut staging = MappedUploadArena::new(&self.device, total_size.max(4))?;
+        let mut copies = Vec::with_capacity(pending.len());
+        for (destination, destination_offset, bytes, before) in pending {
+            let source = staging.allocate(bytes.len(), 4).ok_or_else(|| {
+                RenderError::Backend("combined buffer upload staging allocation failed".into())
+            })?;
+            // SAFETY: the mapped staging range is valid for the requested bytes.
+            unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), source.as_ptr(), bytes.len()) };
+            copies.push((
+                destination,
+                destination_offset,
+                source.as_ptr().addr() as u64 - staging.mapped.as_ptr().addr() as u64,
+                bytes.len() as u64,
+                before,
+            ));
+        }
+
         let allocator: ID3D12CommandAllocator =
             unsafe { self.device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT) }
                 .map_err(backend_error)?;
@@ -3121,26 +3295,37 @@ impl D3d12Renderer {
             self.device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator, None)
         }
         .map_err(backend_error)?;
-        if before != D3D12_RESOURCE_STATE_COPY_DEST {
-            record_transition(&command_list, &resource, before, D3D12_RESOURCE_STATE_COPY_DEST);
-        }
-        // SAFETY: both resources are live, source bytes are in the staging
-        // upload resource, and the destination range was bounds-checked.
-        unsafe {
-            command_list.CopyBufferRegion(
-                &resource,
-                destination_offset,
-                &staging.resource,
-                source.as_ptr().addr() as u64 - staging.mapped.as_ptr().addr() as u64,
-                bytes.len() as u64,
-            );
-        }
-        if before != D3D12_RESOURCE_STATE_COPY_DEST {
-            record_transition(&command_list, &resource, D3D12_RESOURCE_STATE_COPY_DEST, before);
+        for (destination, destination_offset, source_offset, size, before) in &copies {
+            if *before != D3D12_RESOURCE_STATE_COPY_DEST {
+                record_transition(
+                    &command_list,
+                    destination,
+                    *before,
+                    D3D12_RESOURCE_STATE_COPY_DEST,
+                );
+            }
+            // SAFETY: source and destination ranges were validated and the staging
+            // resource remains alive through execute_and_wait.
+            unsafe {
+                command_list.CopyBufferRegion(
+                    destination,
+                    *destination_offset,
+                    &staging.resource,
+                    *source_offset,
+                    *size,
+                );
+            }
+            if *before != D3D12_RESOURCE_STATE_COPY_DEST {
+                record_transition(
+                    &command_list,
+                    destination,
+                    D3D12_RESOURCE_STATE_COPY_DEST,
+                    *before,
+                );
+            }
         }
         unsafe { command_list.Close() }.map_err(backend_error)?;
-        self.execute_and_wait(&command_list)?;
-        Ok(())
+        self.execute_and_wait(&command_list)
     }
 
     pub(crate) fn read_buffer(
@@ -3420,6 +3605,9 @@ impl D3d12Renderer {
         byte_size: u64,
         shared_allocation: Option<Allocation>,
     ) -> Result<GpuResourceHandle, RenderError> {
+        if !self.retired_resources.is_empty() {
+            self.reap_retired_resources(services)?;
+        }
         // SAFETY: D3D12 returns the adapter-specific allocation size/alignment
         // needed by CreatePlacedResource; invalid sentinel sizes are rejected.
         let info = unsafe { self.device.GetResourceAllocationInfo(0, &[desc]) };
@@ -3627,6 +3815,17 @@ impl D3d12Renderer {
             }
             let factory: IDXGIFactory4 =
                 CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0)).map_err(backend_error)?;
+            let allow_tearing = factory.cast::<IDXGIFactory5>().ok().is_some_and(|factory5| {
+                let mut supported = 0_i32;
+                factory5
+                    .CheckFeatureSupport(
+                        DXGI_FEATURE_PRESENT_ALLOW_TEARING,
+                        (&raw mut supported).cast(),
+                        std::mem::size_of::<i32>() as u32,
+                    )
+                    .is_ok()
+                    && supported != 0
+            });
             let (adapter, device) = create_device(&factory)?;
             let adapter: IDXGIAdapter3 = adapter.cast().map_err(backend_error)?;
             let indirect_arguments = [D3D12_INDIRECT_ARGUMENT_DESC {
@@ -3659,8 +3858,14 @@ impl D3d12Renderer {
             };
             let queue: ID3D12CommandQueue =
                 device.CreateCommandQueue(&raw const queue_desc).map_err(backend_error)?;
-            let (swapchain, rtv_heap, rtv_increment, back_buffers) =
-                create_swapchain_and_targets(&factory, &device, &queue, native_window, config)?;
+            let (swapchain, rtv_heap, rtv_increment, back_buffers) = create_swapchain_and_targets(
+                &factory,
+                &device,
+                &queue,
+                native_window,
+                config,
+                allow_tearing,
+            )?;
             let resource_descriptor_heap = create_descriptor_heap(
                 &device,
                 D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
@@ -3703,6 +3908,17 @@ impl D3d12Renderer {
                 device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER);
             let dsv_increment =
                 device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
+            let gpu_profiler = if std::env::var_os("NORD_GPU_PROFILE").is_some() {
+                Some(GpuProfiler {
+                    frequency: queue.GetTimestampFrequency().map_err(backend_error)?,
+                    active: None,
+                    pending: Vec::new(),
+                    reusable: Vec::new(),
+                    samples: Vec::new(),
+                })
+            } else {
+                None
+            };
             let mut renderer = Self {
                 adapter,
                 device,
@@ -3719,11 +3935,13 @@ impl D3d12Renderer {
                 next_frame_slot: 0,
                 next_fence_value: 1,
                 vertical_sync: config.vertical_sync(),
+                allow_tearing,
                 width: config.width(),
                 height: config.height(),
                 suspended: false,
                 heaps: Vec::new(),
                 resources: Vec::new(),
+                descriptor_owners: Arc::new(HashMap::new()),
                 free_resource_slots: Vec::new(),
                 resource_descriptor_heap,
                 sampler_descriptor_heap,
@@ -3736,6 +3954,10 @@ impl D3d12Renderer {
                 indexed_draw_command_signature,
                 graph_submission_active: false,
                 inflight_pass_lists: Vec::new(),
+                retired_pass_lists: Vec::new(),
+                reusable_pass_lists: Arc::new(Mutex::new(Vec::new())),
+                retired_resources: Vec::new(),
+                gpu_profiler,
                 record_only: false,
             };
             renderer.wait_idle()?;
@@ -3800,7 +4022,14 @@ impl D3d12Renderer {
             self.queue
                 .ExecuteCommandLists(&[Some(self.command_list.cast().map_err(backend_error)?)]);
             self.swapchain
-                .Present(u32::from(self.vertical_sync), DXGI_PRESENT(0))
+                .Present(
+                    u32::from(self.vertical_sync),
+                    if !self.vertical_sync && self.allow_tearing {
+                        DXGI_PRESENT_ALLOW_TEARING
+                    } else {
+                        DXGI_PRESENT(0)
+                    },
+                )
                 .ok()
                 .map_err(backend_error)?;
             let fence_value = self.next_fence_value;
@@ -3861,6 +4090,16 @@ impl D3d12Renderer {
             self.command_list.Reset(&frame.allocator, None).map_err(backend_error)?;
 
             let back_buffer = &self.back_buffers[buffer_index];
+            if let Some(capture) =
+                self.gpu_profiler.as_mut().and_then(|profiler| profiler.active.as_mut())
+            {
+                self.command_list.EndQuery(
+                    &capture.heap,
+                    D3D12_QUERY_TYPE_TIMESTAMP,
+                    capture.written,
+                );
+                capture.written += 1;
+            }
             if source_state != D3D12_RESOURCE_STATE_COPY_SOURCE {
                 record_transition(
                     &self.command_list,
@@ -3890,11 +4129,42 @@ impl D3d12Renderer {
                     source_state,
                 );
             }
+            if let Some(capture) =
+                self.gpu_profiler.as_mut().and_then(|profiler| profiler.active.as_mut())
+            {
+                let expected = u32::try_from(capture.names.len()).map_err(backend_error)? + 2;
+                if capture.written != expected {
+                    return Err(RenderError::Backend(
+                        "GPU timing markers do not match graph passes".into(),
+                    ));
+                }
+                self.command_list.EndQuery(
+                    &capture.heap,
+                    D3D12_QUERY_TYPE_TIMESTAMP,
+                    capture.written,
+                );
+                capture.written += 1;
+                self.command_list.ResolveQueryData(
+                    &capture.heap,
+                    D3D12_QUERY_TYPE_TIMESTAMP,
+                    0,
+                    capture.written,
+                    &capture.readback,
+                    0,
+                );
+            }
             self.command_list.Close().map_err(backend_error)?;
             self.queue
                 .ExecuteCommandLists(&[Some(self.command_list.cast().map_err(backend_error)?)]);
             self.swapchain
-                .Present(u32::from(self.vertical_sync), DXGI_PRESENT(0))
+                .Present(
+                    u32::from(self.vertical_sync),
+                    if !self.vertical_sync && self.allow_tearing {
+                        DXGI_PRESENT_ALLOW_TEARING
+                    } else {
+                        DXGI_PRESENT(0)
+                    },
+                )
                 .ok()
                 .map_err(backend_error)?;
             let fence_value = self.next_fence_value;
@@ -3905,6 +4175,12 @@ impl D3d12Renderer {
             self.queue.Signal(&self.fence, fence_value).map_err(backend_error)?;
             self.frames[frame_index].fence_value = fence_value;
             self.next_frame_slot = (frame_index + 1) % self.frames.len();
+            if let Some(profiler) = &mut self.gpu_profiler
+                && let Some(mut capture) = profiler.active.take()
+            {
+                capture.fence_value = fence_value;
+                profiler.pending.push(capture);
+            }
         }
         if let Some(slot) = self.resources.get_mut(source_index) {
             slot.state = source_state;
@@ -3930,7 +4206,12 @@ impl D3d12Renderer {
                     width,
                     height,
                     DXGI_FORMAT_R8G8B8A8_UNORM,
-                    DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT,
+                    DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT
+                        | if self.allow_tearing {
+                            DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING
+                        } else {
+                            Default::default()
+                        },
                 )
                 .map_err(backend_error)?;
             let rtv_start = self.rtv_heap.GetCPUDescriptorHandleForHeapStart();
@@ -3960,23 +4241,191 @@ impl D3d12Renderer {
                 .checked_add(1)
                 .ok_or_else(|| RenderError::Backend("D3D12 fence value space exhausted".into()))?;
             self.queue.Signal(&self.fence, value).map_err(backend_error)?;
-            self.wait_for_fence(value)
+            self.wait_for_fence(value)?;
+            let mut reusable = self
+                .reusable_pass_lists
+                .lock()
+                .map_err(|_| RenderError::Backend("command-list pool lock was poisoned".into()))?;
+            reusable.extend(self.inflight_pass_lists.drain(..));
+            for (_, lists) in self.retired_pass_lists.drain(..) {
+                reusable.extend(lists);
+            }
+            Ok(())
         }
     }
 
-    pub(crate) fn begin_graph_submission(&mut self) -> Result<(), RenderError> {
+    pub(crate) fn begin_graph_submission(
+        &mut self,
+        services: &mut RenderServices,
+        graph: &crate::CompiledRenderGraph,
+    ) -> Result<(), RenderError> {
+        self.reap_retired_pass_lists()?;
+        self.reap_retired_resources(services)?;
         if self.graph_submission_active || !self.inflight_pass_lists.is_empty() {
             return Err(RenderError::Backend("a graph submission is already active".into()));
         }
+        self.poll_gpu_profiles()?;
+        if let Some(profiler) = &mut self.gpu_profiler {
+            let required = u32::try_from(graph.passes().len())
+                .ok()
+                .and_then(|passes| passes.checked_add(3))
+                .ok_or_else(|| RenderError::Backend("too many GPU timing queries".into()))?;
+            let mut capture = if let Some(index) =
+                profiler.reusable.iter().position(|capture| capture.capacity >= required)
+            {
+                profiler.reusable.swap_remove(index)
+            } else {
+                create_gpu_profile_capture(&self.device, required)?
+            };
+            capture.names.clear();
+            capture.names.extend(graph.passes().iter().map(|pass| pass.name.clone()));
+            capture.written = 0;
+            capture.fence_value = 0;
+            profiler.active = Some(capture);
+        }
         self.graph_submission_active = true;
+        self.record_gpu_timestamp()?;
         Ok(())
     }
 
     pub(crate) fn end_graph_submission(&mut self) -> Result<(), RenderError> {
         self.graph_submission_active = false;
-        self.wait_idle()?;
-        self.inflight_pass_lists.clear();
+        if self.inflight_pass_lists.is_empty() {
+            return Ok(());
+        }
+        let command_lists = self
+            .inflight_pass_lists
+            .iter()
+            .map(|(_, list)| list.cast().map(Some).map_err(backend_error))
+            .collect::<Result<Vec<_>, _>>()?;
+        let value = self.next_fence_value;
+        self.next_fence_value = self
+            .next_fence_value
+            .checked_add(1)
+            .ok_or_else(|| RenderError::Backend("D3D12 fence value space exhausted".into()))?;
+        // Submit all graph passes in one driver call, in graph order. Retain
+        // their allocators/lists until the direct queue retires the submission.
+        // A full GPU wait here would serialize every frame.
+        unsafe {
+            self.queue.ExecuteCommandLists(&command_lists);
+            self.queue.Signal(&self.fence, value).map_err(backend_error)?;
+        }
+        self.retired_pass_lists.push((value, std::mem::take(&mut self.inflight_pass_lists)));
         Ok(())
+    }
+
+    fn reap_retired_pass_lists(&mut self) -> Result<(), RenderError> {
+        let completed = unsafe { self.fence.GetCompletedValue() };
+        if completed == u64::MAX {
+            return Err(RenderError::Backend("D3D12 device was removed".into()));
+        }
+        let mut reusable = self
+            .reusable_pass_lists
+            .lock()
+            .map_err(|_| RenderError::Backend("command-list pool lock was poisoned".into()))?;
+        let mut index = 0;
+        while index < self.retired_pass_lists.len() {
+            if self.retired_pass_lists[index].0 <= completed {
+                let (_, lists) = self.retired_pass_lists.swap_remove(index);
+                reusable.extend(lists);
+            } else {
+                index += 1;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn reap_retired_resources(
+        &mut self,
+        services: &mut RenderServices,
+    ) -> Result<(), RenderError> {
+        if self.retired_resources.is_empty() {
+            return Ok(());
+        }
+        let completed = unsafe { self.fence.GetCompletedValue() };
+        if completed == u64::MAX {
+            return Err(RenderError::Backend("D3D12 device was removed".into()));
+        }
+        let mut index = 0;
+        while index < self.retired_resources.len() {
+            if self.retired_resources[index].fence_value > completed {
+                index += 1;
+                continue;
+            }
+            let retired = self.retired_resources.swap_remove(index);
+            for descriptor in retired.descriptors {
+                if !services.descriptors().release(descriptor) {
+                    return Err(RenderError::Backend(
+                        "retired GPU descriptor handle was stale".into(),
+                    ));
+                }
+            }
+            for allocation in retired.allocations {
+                if !services.allocator().deallocate(allocation) {
+                    return Err(RenderError::Backend(
+                        "retired GPU allocation was inconsistent".into(),
+                    ));
+                }
+            }
+            // Dropping `retired.resources` is safe only after the queue fence.
+        }
+        Ok(())
+    }
+
+    fn record_gpu_timestamp(&mut self) -> Result<(), RenderError> {
+        let Some(capture) =
+            self.gpu_profiler.as_ref().and_then(|profiler| profiler.active.as_ref())
+        else {
+            return Ok(());
+        };
+        let heap = capture.heap.clone();
+        let index = capture.written;
+        if index >= capture.capacity {
+            return Err(RenderError::Backend("GPU timing query heap is exhausted".into()));
+        }
+        let (allocator, list) = acquire_pass_list(&self.device, &self.reusable_pass_lists)?;
+        unsafe {
+            list.EndQuery(&heap, D3D12_QUERY_TYPE_TIMESTAMP, index);
+            list.Close().map_err(backend_error)?;
+        }
+        self.submit_pass_command_list(allocator, list)?;
+        if let Some(capture) =
+            self.gpu_profiler.as_mut().and_then(|profiler| profiler.active.as_mut())
+        {
+            capture.written += 1;
+        }
+        Ok(())
+    }
+
+    fn poll_gpu_profiles(&mut self) -> Result<(), RenderError> {
+        let Some(profiler) = &mut self.gpu_profiler else { return Ok(()) };
+        profiler.frequency =
+            unsafe { self.queue.GetTimestampFrequency() }.map_err(backend_error)?;
+        let completed = unsafe { self.fence.GetCompletedValue() };
+        if completed == u64::MAX {
+            return Err(RenderError::Backend("D3D12 device was removed".into()));
+        }
+        let mut index = 0;
+        while index < profiler.pending.len() {
+            if profiler.pending[index].fence_value > completed {
+                index += 1;
+                continue;
+            }
+            let capture = profiler.pending.swap_remove(index);
+            profiler.samples.push(read_gpu_profile_capture(&capture, profiler.frequency)?);
+            profiler.reusable.push(capture);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn take_gpu_frame_timings(
+        &mut self,
+    ) -> Result<Vec<crate::GpuFrameTiming>, RenderError> {
+        self.poll_gpu_profiles()?;
+        Ok(self
+            .gpu_profiler
+            .as_mut()
+            .map_or_else(Vec::new, |profiler| std::mem::take(&mut profiler.samples)))
     }
 
     fn submit_pass_command_list(
@@ -3989,12 +4438,7 @@ impl D3d12Renderer {
             return Ok(());
         }
         if self.graph_submission_active {
-            // Retain both objects until the queue fence retires this list.
-            // SAFETY: the list is closed, belongs to this device, and is sent
-            // to the renderer's one direct queue in graph order.
-            unsafe {
-                self.queue.ExecuteCommandLists(&[Some(list.cast().map_err(backend_error)?)]);
-            }
+            // The graph submits every closed pass list together at graph end.
             self.inflight_pass_lists.push((allocator, list));
             Ok(())
         } else {
@@ -4048,7 +4492,9 @@ impl D3d12Renderer {
 
 impl Drop for D3d12Renderer {
     fn drop(&mut self) {
-        let _ = self.wait_idle();
+        if !self.record_only {
+            let _ = self.wait_idle();
+        }
     }
 }
 
@@ -4107,6 +4553,133 @@ fn is_contiguous_descriptor_range(descriptors: &[DescriptorHandle]) -> bool {
         descriptor.kind() == first.kind()
             && usize::try_from(descriptor.index()).ok()
                 == usize::try_from(first.index()).ok().and_then(|index| index.checked_add(offset))
+    })
+}
+
+fn acquire_pass_list(
+    device: &ID3D12Device,
+    pool: &Mutex<Vec<(ID3D12CommandAllocator, ID3D12GraphicsCommandList)>>,
+) -> Result<(ID3D12CommandAllocator, ID3D12GraphicsCommandList), RenderError> {
+    let reused = pool
+        .lock()
+        .map_err(|_| RenderError::Backend("command-list pool lock was poisoned".into()))?
+        .pop();
+    if let Some((allocator, list)) = reused {
+        // The pair enters this pool only after its submission fence completes.
+        unsafe {
+            allocator.Reset().map_err(backend_error)?;
+            list.Reset(&allocator, None).map_err(backend_error)?;
+        }
+        return Ok((allocator, list));
+    }
+    let allocator: ID3D12CommandAllocator =
+        unsafe { device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT) }
+            .map_err(backend_error)?;
+    let list: ID3D12GraphicsCommandList =
+        unsafe { device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator, None) }
+            .map_err(backend_error)?;
+    Ok((allocator, list))
+}
+
+fn create_gpu_profile_capture(
+    device: &ID3D12Device,
+    capacity: u32,
+) -> Result<GpuProfileCapture, RenderError> {
+    let desc = D3D12_QUERY_HEAP_DESC {
+        Type: D3D12_QUERY_HEAP_TYPE_TIMESTAMP,
+        Count: capacity,
+        NodeMask: 0,
+    };
+    let mut heap = None;
+    unsafe { device.CreateQueryHeap::<ID3D12QueryHeap>(&raw const desc, &raw mut heap) }
+        .map_err(backend_error)?;
+    let heap =
+        heap.ok_or_else(|| RenderError::Backend("D3D12 returned an empty query heap".into()))?;
+    let properties = D3D12_HEAP_PROPERTIES {
+        Type: D3D12_HEAP_TYPE_READBACK,
+        CPUPageProperty: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+        MemoryPoolPreference: D3D12_MEMORY_POOL_UNKNOWN,
+        CreationNodeMask: 1,
+        VisibleNodeMask: 1,
+    };
+    let resource_desc = D3D12_RESOURCE_DESC {
+        Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+        Alignment: 0,
+        Width: u64::from(capacity) * 8,
+        Height: 1,
+        DepthOrArraySize: 1,
+        MipLevels: 1,
+        Format: DXGI_FORMAT_UNKNOWN,
+        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+        Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+        Flags: D3D12_RESOURCE_FLAG_NONE,
+    };
+    let mut readback = None;
+    unsafe {
+        device.CreateCommittedResource::<ID3D12Resource>(
+            &raw const properties,
+            D3D12_HEAP_FLAG_NONE,
+            &raw const resource_desc,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            None,
+            &raw mut readback,
+        )
+    }
+    .map_err(backend_error)?;
+    let readback = readback.ok_or_else(|| {
+        RenderError::Backend("D3D12 returned an empty timestamp readback buffer".into())
+    })?;
+    Ok(GpuProfileCapture {
+        heap,
+        readback,
+        capacity,
+        names: Vec::new(),
+        written: 0,
+        fence_value: 0,
+    })
+}
+
+fn read_gpu_profile_capture(
+    capture: &GpuProfileCapture,
+    frequency: u64,
+) -> Result<crate::GpuFrameTiming, RenderError> {
+    if frequency == 0 || capture.written != capture.names.len() as u32 + 3 {
+        return Err(RenderError::Backend("GPU timestamp capture is incomplete".into()));
+    }
+    let bytes = capture.written as usize * 8;
+    let mut pointer = std::ptr::null_mut();
+    unsafe {
+        capture
+            .readback
+            .Map(0, Some(&D3D12_RANGE { Begin: 0, End: bytes }), Some(&raw mut pointer))
+            .map_err(backend_error)?;
+    }
+    if pointer.is_null() {
+        unsafe { capture.readback.Unmap(0, Some(&D3D12_RANGE { Begin: 0, End: 0 })) };
+        return Err(RenderError::Backend("GPU timestamp readback was null".into()));
+    }
+    let ticks = (0..capture.written as usize)
+        .map(|index| unsafe { std::ptr::read_unaligned(pointer.cast::<u64>().add(index)) })
+        .collect::<Vec<_>>();
+    unsafe { capture.readback.Unmap(0, Some(&D3D12_RANGE { Begin: 0, End: 0 })) };
+    let to_nanoseconds = |start: u64, end: u64| -> u64 {
+        ((end.saturating_sub(start) as f64 * 1_000_000_000.0) / frequency as f64) as u64
+    };
+    let passes = capture
+        .names
+        .iter()
+        .enumerate()
+        .map(|(index, name)| crate::GpuPassTiming {
+            name: name.clone(),
+            nanoseconds: to_nanoseconds(ticks[index], ticks[index + 1]),
+        })
+        .collect();
+    let graph_end = capture.names.len();
+    Ok(crate::GpuFrameTiming {
+        passes,
+        graph_nanoseconds: to_nanoseconds(ticks[0], ticks[graph_end]),
+        graph_to_copy_gap_nanoseconds: to_nanoseconds(ticks[graph_end], ticks[graph_end + 1]),
+        present_copy_nanoseconds: to_nanoseconds(ticks[graph_end + 1], ticks[graph_end + 2]),
     })
 }
 
@@ -4471,6 +5044,7 @@ unsafe fn create_swapchain_and_targets(
     queue: &ID3D12CommandQueue,
     native_window: raw_window_handle::Win32WindowHandle,
     config: RenderConfig,
+    allow_tearing: bool,
 ) -> Result<(IDXGISwapChain3, ID3D12DescriptorHeap, u32, Vec<ID3D12Resource>), RenderError> {
     // SAFETY: valid HWND, queue, descriptors, and resource outputs are supplied.
     unsafe {
@@ -4485,7 +5059,13 @@ unsafe fn create_swapchain_and_targets(
             Scaling: DXGI_SCALING_STRETCH,
             SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
             AlphaMode: DXGI_ALPHA_MODE_IGNORE,
-            Flags: DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT.0 as u32,
+            Flags: (DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT
+                | if allow_tearing {
+                    DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING
+                } else {
+                    Default::default()
+                })
+            .0 as u32,
         };
         let swapchain1 = factory
             .CreateSwapChainForHwnd(

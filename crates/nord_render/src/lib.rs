@@ -5,6 +5,7 @@
 
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use std::sync::Arc;
 
 mod allocator;
 mod descriptors;
@@ -54,6 +55,22 @@ mod d3d12;
 /// Number of independently retired frames kept in flight.
 pub const FRAMES_IN_FLIGHT: usize = 2;
 
+/// GPU execution time of one compiled render-graph pass, including its incoming barriers.
+#[derive(Debug, Clone)]
+pub struct GpuPassTiming {
+    pub name: String,
+    pub nanoseconds: u64,
+}
+
+/// Direct-queue timestamps resolved after the frame's GPU fence completes.
+#[derive(Debug, Clone)]
+pub struct GpuFrameTiming {
+    pub passes: Vec<GpuPassTiming>,
+    pub graph_nanoseconds: u64,
+    pub graph_to_copy_gap_nanoseconds: u64,
+    pub present_copy_nanoseconds: u64,
+}
+
 /// GPU textures materialized for one compiled frame graph. Destroy this set
 /// after its submissions retire; aliased resources share one allocator range.
 pub struct TransientResources {
@@ -89,7 +106,7 @@ impl TransientResources {
 pub struct RenderServices {
     allocator: GpuAllocator,
     deferred_allocator: DeferredGpuAllocator,
-    descriptors: DescriptorArena,
+    descriptors: Arc<DescriptorArena>,
     pipelines: PipelineCache,
 }
 
@@ -102,7 +119,7 @@ impl Default for RenderServices {
                 .with_class_block_size(AllocationClass::Upload, 8 * 1024 * 1024)
                 .with_class_block_size(AllocationClass::Readback, 4 * 1024 * 1024),
             deferred_allocator: DeferredGpuAllocator::default(),
-            descriptors: DescriptorArena::new(65_536, 2_048, 4_096, 2_048),
+            descriptors: Arc::new(DescriptorArena::new(65_536, 2_048, 4_096, 2_048)),
             pipelines: PipelineCache::default(),
         }
     }
@@ -113,7 +130,7 @@ impl RenderServices {
         Self {
             allocator: GpuAllocator::new(1),
             deferred_allocator: DeferredGpuAllocator::default(),
-            descriptors: self.descriptors.clone(),
+            descriptors: Arc::clone(&self.descriptors),
             pipelines: PipelineCache::default(),
         }
     }
@@ -129,7 +146,7 @@ impl RenderServices {
     /// Persistent descriptor-slot allocator; descriptor slots must be retired
     /// after the last fence that can reference them.
     pub fn descriptors(&mut self) -> &mut DescriptorArena {
-        &mut self.descriptors
+        Arc::make_mut(&mut self.descriptors)
     }
     /// Description-keyed graphics pipeline cache.
     pub fn pipelines(&mut self) -> &mut PipelineCache {
@@ -686,10 +703,26 @@ impl Renderer {
     ///
     /// # Errors
     /// Returns an error when another graph scope is active.
-    pub fn begin_graph_submission(&mut self) -> Result<(), RenderError> {
+    pub fn begin_graph_submission(
+        &mut self,
+        graph: &CompiledRenderGraph,
+    ) -> Result<(), RenderError> {
         #[cfg(target_os = "windows")]
         {
-            self.backend.begin_graph_submission()
+            self.backend.begin_graph_submission(&mut self.services, graph)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = graph;
+            Err(RenderError::UnsupportedBackend)
+        }
+    }
+
+    /// Drain completed GPU timestamp samples. Outstanding samples are kept until their fence retires.
+    pub fn take_gpu_frame_timings(&mut self) -> Result<Vec<GpuFrameTiming>, RenderError> {
+        #[cfg(target_os = "windows")]
+        {
+            self.backend.take_gpu_frame_timings()
         }
         #[cfg(not(target_os = "windows"))]
         {
@@ -1216,6 +1249,25 @@ impl Renderer {
         }
     }
 
+    /// Stage several device-local buffers through one command list and fence wait.
+    ///
+    /// # Errors
+    /// Returns an error for stale resources, invalid ranges, or copy submission failure.
+    pub fn upload_buffers(
+        &mut self,
+        uploads: &[(GpuResourceHandle, u64, &[u8])],
+    ) -> Result<(), RenderError> {
+        #[cfg(target_os = "windows")]
+        {
+            self.backend.upload_buffers(uploads)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = uploads;
+            Err(RenderError::UnsupportedBackend)
+        }
+    }
+
     /// Upload one uncompressed 2D texture subresource using D3D12's copyable
     /// footprint row pitch. This bootstrap path waits for completion.
     ///
@@ -1240,11 +1292,11 @@ impl Renderer {
         }
     }
 
-    /// Destroy a GPU resource and return its allocation after all queue work
-    /// completes. The conservative initial implementation waits for the queue.
+    /// Invalidate a GPU resource immediately and retire its native allocation
+    /// and descriptors after the last submission fence completes.
     ///
     /// # Errors
-    /// Returns an error if the handle is stale or queue synchronization fails.
+    /// Returns an error if the handle is stale or retirement bookkeeping fails.
     pub fn destroy_resource(&mut self, handle: GpuResourceHandle) -> Result<(), RenderError> {
         #[cfg(target_os = "windows")]
         {
@@ -1253,6 +1305,22 @@ impl Renderer {
         #[cfg(not(target_os = "windows"))]
         {
             let _ = handle;
+            Err(RenderError::UnsupportedBackend)
+        }
+    }
+
+    /// Retire several GPU resources without stalling the direct queue.
+    ///
+    /// # Errors
+    /// Returns an error if any handle is stale, duplicated, or retirement fails.
+    pub fn destroy_resources(&mut self, handles: &[GpuResourceHandle]) -> Result<(), RenderError> {
+        #[cfg(target_os = "windows")]
+        {
+            self.backend.destroy_resources(&mut self.services, handles)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = handles;
             Err(RenderError::UnsupportedBackend)
         }
     }
@@ -1370,7 +1438,8 @@ impl Renderer {
     pub fn wait_idle(&mut self) -> Result<(), RenderError> {
         #[cfg(target_os = "windows")]
         {
-            self.backend.wait_idle()
+            self.backend.wait_idle()?;
+            self.backend.reap_retired_resources(&mut self.services)
         }
         #[cfg(not(target_os = "windows"))]
         {
