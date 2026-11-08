@@ -11,7 +11,7 @@ use nord_app::{
 const BUFFER_BYTES: u64 = 192;
 const BUFFER_CAPACITY: usize = 192;
 const ARM_PIXELS: f32 = 16.0;
-const GAP_PIXELS: f32 = 0.0;
+const GAP_PIXELS: f32 = 6.0;
 const HALF_THICKNESS_PIXELS: f32 = 2.0;
 
 pub(super) struct Crosshair {
@@ -81,7 +81,6 @@ impl Crosshair {
             per_instance: false,
             instance_step_rate: 0,
         });
-
         let mut blit_pipeline = ApplicationGraphicsPipelineDesc::new(
             blit_vertex_shader.shader_id,
             blit_pixel_shader.shader_id,
@@ -164,50 +163,6 @@ impl Crosshair {
     }
 }
 
-#[cfg(test)]
-fn contrast_color_srgb(background: [f32; 3]) -> [f32; 3] {
-    let linear = background.map(|channel| {
-        if channel <= 0.04045 { channel / 12.92 } else { ((channel + 0.055) / 1.055).powf(2.4) }
-    });
-    let luminance = linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722;
-    let chroma = background.iter().copied().fold(f32::NEG_INFINITY, f32::max)
-        - background.iter().copied().fold(f32::INFINITY, f32::min);
-    if chroma < 0.08 {
-        let neutral = if luminance < 0.74 { 1.0 } else { 0.0 };
-        return [neutral; 3];
-    }
-    let mut complement = linear.map(|channel| 1.0 - channel);
-    let complement_luminance =
-        complement[0] * 0.2126 + complement[1] * 0.7152 + complement[2] * 0.0722;
-    let contrast =
-        (luminance.max(complement_luminance) + 0.05) / (luminance.min(complement_luminance) + 0.05);
-    if contrast < 4.5 {
-        let background_is_light = luminance >= 0.18;
-        let target_luminance = if background_is_light {
-            ((luminance + 0.05) / 4.5 - 0.05).clamp(0.0, 1.0)
-        } else {
-            (4.5 * (luminance + 0.05) - 0.05).clamp(0.0, 1.0)
-        };
-        if target_luminance < complement_luminance {
-            let scale = target_luminance / complement_luminance.max(0.0001);
-            complement.iter_mut().for_each(|channel| *channel *= scale);
-        } else {
-            let lift = (target_luminance - complement_luminance)
-                / (1.0 - complement_luminance).max(0.0001);
-            complement.iter_mut().for_each(|channel| {
-                *channel += (1.0 - *channel) * lift.clamp(0.0, 1.0);
-            });
-        }
-    }
-    complement.map(|inverse| {
-        if inverse <= 0.003_130_8 {
-            12.92 * inverse
-        } else {
-            1.055 * inverse.powf(1.0 / 2.4) - 0.055
-        }
-    })
-}
-
 fn crosshair_vertices(width: u32, height: u32) -> nord_app::ApplicationResult<Vec<u8>> {
     let sx = 2.0 / super::exact_surface_extent(width)?;
     let sy = 2.0 / super::exact_surface_extent(height)?;
@@ -235,7 +190,7 @@ fn crosshair_vertices(width: u32, height: u32) -> nord_app::ApplicationResult<Ve
 
 #[cfg(test)]
 mod tests {
-    use super::{contrast_color_srgb, crosshair_vertices};
+    use super::crosshair_vertices;
 
     #[test]
     fn crosshair_geometry_has_four_centered_arms_and_valid_buffer_size() {
@@ -248,40 +203,5 @@ mod tests {
         assert!(values.iter().all(|value| value.is_finite()));
         assert!(values.iter().any(|value| *value > 0.0));
         assert!(values.iter().any(|value| *value < 0.0));
-    }
-
-    #[test]
-    fn crosshair_uses_neutral_white_on_medium_gray() {
-        assert_eq!(contrast_color_srgb([0.5, 0.5, 0.5]), [1.0, 1.0, 1.0]);
-    }
-
-    #[test]
-    fn crosshair_complements_blue_sky_to_gold() {
-        let color = contrast_color_srgb([0.43, 0.70, 0.94]);
-        assert!(color[0] > color[1] && color[1] > color[2]);
-        let background_luminance = 0.43_f32.powf(2.4) * 0.2126
-            + ((0.70 + 0.055) / 1.055_f32).powf(2.4) * 0.7152
-            + ((0.94 + 0.055) / 1.055_f32).powf(2.4) * 0.0722;
-        let crosshair_luminance = color[0].powf(2.4) * 0.2126
-            + ((color[1] + 0.055) / 1.055_f32).powf(2.4) * 0.7152
-            + ((color[2] + 0.055) / 1.055_f32).powf(2.4) * 0.0722;
-        assert!(
-            (background_luminance.max(crosshair_luminance) + 0.05)
-                / (background_luminance.min(crosshair_luminance) + 0.05)
-                >= 4.49
-        );
-    }
-
-    #[test]
-    fn crosshair_complements_green_to_magenta() {
-        let color = contrast_color_srgb([0.2, 0.7, 0.2]);
-        assert!(color[0] > color[1] && color[2] > color[1]);
-    }
-
-    #[test]
-    fn crosshair_does_not_treat_dark_wood_as_gray() {
-        let color = contrast_color_srgb([0.3, 0.2, 0.1]);
-        assert!(color[2] > color[0]);
-        assert!(color[0] < 1.0 && color[1] < 1.0);
     }
 }

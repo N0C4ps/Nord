@@ -24,6 +24,7 @@ pub(super) struct ShadowMapResources {
 /// One directional light map with its own raster depth attachment and sampled depth values.
 pub(super) struct DirectionalShadowMap {
     resources: ShadowMapResources,
+    resolution: u32,
     sampled_binding: ApplicationPipelineDescriptorBinding,
     pipeline: ApplicationGraphicsPipelineDesc,
     vertex_shader: ApplicationCompiledShader,
@@ -31,11 +32,14 @@ pub(super) struct DirectionalShadowMap {
 }
 
 impl DirectionalShadowMap {
-    pub(super) fn create(renderer: &mut ApplicationRenderer) -> nord_app::ApplicationResult<Self> {
+    pub(super) fn create(
+        renderer: &mut ApplicationRenderer,
+        resolution: u32,
+    ) -> nord_app::ApplicationResult<Self> {
         let target = renderer
             .create_render_target(ApplicationRenderTargetDesc::new(
-                SHADOW_MAP_RESOLUTION,
-                SHADOW_MAP_RESOLUTION,
+                resolution,
+                resolution,
                 Some(ApplicationTextureFormat::R32Float),
                 Some(ApplicationTextureFormat::D32Float),
             )?)
@@ -78,6 +82,7 @@ impl DirectionalShadowMap {
             .context("creating the directional shadow depth pipeline")?;
         Ok(Self {
             resources: ShadowMapResources { color, color_view, depth, depth_view },
+            resolution,
             sampled_binding: ApplicationPipelineDescriptorBinding {
                 kind: ApplicationShaderBindingKind::SampledResource,
                 register: 3,
@@ -92,6 +97,10 @@ impl DirectionalShadowMap {
 
     pub(super) const fn resolution() -> u32 {
         SHADOW_MAP_RESOLUTION
+    }
+
+    pub(super) const fn active_resolution(&self) -> u32 {
+        self.resolution
     }
 
     pub(super) const fn resources(&self) -> ShadowMapResources {

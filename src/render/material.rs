@@ -9,6 +9,8 @@ use nord_app::{
     ApplicationShaderStage, ApplicationTextureDesc, ApplicationTextureFormat,
     ApplicationTextureUsage, ApplicationVertexAttribute, ApplicationVertexFormat,
 };
+use std::collections::HashMap;
+use std::io::Cursor;
 
 const MATERIAL_CONSTANT_BYTES: u64 = 256;
 const MATERIAL_CONSTANT_REGISTER: u32 = 1;
@@ -86,6 +88,7 @@ impl PbrMaterial {
     pub(super) fn load(
         renderer: &mut ApplicationRenderer,
         descriptor: PbrMaterialDesc,
+        advanced_lighting: bool,
     ) -> nord_app::ApplicationResult<Self> {
         let (vertex_shader, pixel_shader) = load_validated_shader_program()?;
         let pipeline = create_pbr_pipeline(renderer, &vertex_shader, &pixel_shader)?;
@@ -105,7 +108,7 @@ impl PbrMaterial {
             .map_err(ApplicationDiagnosticError::msg)
             .context("creating the game's PBR material constant binding")?;
         renderer
-            .write_buffer(constants, 0, &encode_material_constants(descriptor))
+            .write_buffer(constants, 0, &encode_material_constants(descriptor, advanced_lighting))
             .map_err(ApplicationDiagnosticError::msg)
             .context("writing the game's linear PBR material factors")?;
 
@@ -188,6 +191,134 @@ impl PbrMaterial {
         }
         Ok(())
     }
+}
+
+struct BlockTextureGpu {
+    resource: ApplicationGpuResourceHandle,
+    view: ApplicationDescriptorHandle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum BlockTextureId {
+    Dirt,
+    Grass,
+    GrassSide,
+    Stone,
+}
+
+impl BlockTextureId {
+    fn from_path(path: &str) -> Option<Self> {
+        match path {
+            "textures/blocks/dirt_block.png" => Some(Self::Dirt),
+            "textures/blocks/grass_block.png" => Some(Self::Grass),
+            "textures/blocks/grass_block_side.png" => Some(Self::GrassSide),
+            "textures/blocks/stone_block.png" => Some(Self::Stone),
+            _ => None,
+        }
+    }
+
+    const fn path(self) -> &'static str {
+        match self {
+            Self::Dirt => "textures/blocks/dirt_block.png",
+            Self::Grass => "textures/blocks/grass_block.png",
+            Self::GrassSide => "textures/blocks/grass_block_side.png",
+            Self::Stone => "textures/blocks/stone_block.png",
+        }
+    }
+}
+
+/// Embedded block base-color textures and their GPU views.
+pub(super) struct BlockTextureMaterials {
+    textures: HashMap<String, BlockTextureGpu>,
+}
+
+impl BlockTextureMaterials {
+    pub(super) fn create(renderer: &mut ApplicationRenderer) -> nord_app::ApplicationResult<Self> {
+        let assets: [(&str, &[u8]); 4] = [
+            (
+                "textures/blocks/dirt_block.png",
+                include_bytes!("../../assets/textures/blocks/dirt_block.png"),
+            ),
+            (
+                "textures/blocks/grass_block.png",
+                include_bytes!("../../assets/textures/blocks/grass_block.png"),
+            ),
+            (
+                "textures/blocks/grass_block_side.png",
+                include_bytes!("../../assets/textures/blocks/grass_block_side.png"),
+            ),
+            (
+                "textures/blocks/stone_block.png",
+                include_bytes!("../../assets/textures/blocks/stone_block.png"),
+            ),
+        ];
+        let mut textures = HashMap::with_capacity(assets.len());
+        for (path, encoded) in assets {
+            let decoded = decode_block_png(encoded)
+                .map_err(ApplicationDiagnosticError::msg)
+                .context(format!("decoding embedded block texture `{path}`"))?;
+            let mip_chain = generate_mips_from_size(decoded, TextureMipKind::SrgbColor, 16);
+            let (resource, view) = create_texture_with_mips(
+                renderer,
+                ApplicationTextureFormat::Rgba8Srgb,
+                16,
+                &mip_chain,
+            )
+            .context(format!("uploading embedded block texture `{path}`"))?;
+            textures.insert(path.to_owned(), BlockTextureGpu { resource, view });
+        }
+        Ok(Self { textures })
+    }
+
+    pub(super) fn view(&self, path: &str) -> Option<ApplicationDescriptorHandle> {
+        self.textures.get(path).map(|texture| texture.view)
+    }
+
+    pub(super) fn view_for_id(&self, id: BlockTextureId) -> Option<ApplicationDescriptorHandle> {
+        self.view(id.path())
+    }
+
+    pub(super) fn id_for_path(path: &str) -> Option<BlockTextureId> {
+        BlockTextureId::from_path(path)
+    }
+
+    pub(super) fn resources(&self) -> impl Iterator<Item = ApplicationGpuResourceHandle> + '_ {
+        self.textures.values().map(|texture| texture.resource)
+    }
+
+    pub(super) fn shutdown(
+        &self,
+        renderer: &mut ApplicationRenderer,
+    ) -> nord_app::ApplicationResult<()> {
+        for texture in self.textures.values() {
+            renderer
+                .destroy_descriptor(texture.view)
+                .map_err(ApplicationDiagnosticError::msg)
+                .context("retiring a block base-color texture descriptor")?;
+            renderer
+                .destroy_resource(texture.resource)
+                .map_err(ApplicationDiagnosticError::msg)
+                .context("retiring an embedded block base-color texture")?;
+        }
+        Ok(())
+    }
+}
+
+fn decode_block_png(encoded: &[u8]) -> Result<Vec<u8>, String> {
+    let mut decoder = png::Decoder::new(Cursor::new(encoded));
+    decoder.set_transformations(
+        png::Transformations::EXPAND | png::Transformations::STRIP_16 | png::Transformations::ALPHA,
+    );
+    let mut reader = decoder.read_info().map_err(|error| error.to_string())?;
+    let mut output = vec![0; reader.output_buffer_size().unwrap_or(0)];
+    let info = reader.next_frame(&mut output).map_err(|error| error.to_string())?;
+    if info.width != 16 || info.height != 16 || info.color_type != png::ColorType::Rgba {
+        return Err(format!(
+            "block texture must decode to 16x16 RGBA pixels, got {}x{} {:?}",
+            info.width, info.height, info.color_type
+        ));
+    }
+    Ok(output[..info.buffer_size()].to_vec())
 }
 
 fn load_validated_shader_program()
@@ -288,16 +419,18 @@ fn create_material_textures(
             .context("creating the game's tangent-space normal map")?;
     let sampler = renderer
         .create_sampler(ApplicationSamplerDesc {
-            filter: ApplicationSamplerFilter::Anisotropic,
+            // Pixel-art block maps should stay crisp at close range. Point
+            // filtering avoids smearing each 16x16 source texel across faces.
+            filter: ApplicationSamplerFilter::Point,
             address_u: ApplicationSamplerAddressMode::Repeat,
             address_v: ApplicationSamplerAddressMode::Repeat,
             address_w: ApplicationSamplerAddressMode::Repeat,
-            max_anisotropy: 8,
+            max_anisotropy: 1,
             min_lod: 0.0,
             max_lod: f32::from(TEXTURE_MIP_LEVELS - 1),
         })
         .map_err(ApplicationDiagnosticError::msg)
-        .context("creating the game's anisotropic PBR texture sampler")?;
+        .context("creating the game's crisp block texture sampler")?;
     Ok((
         [base_color, metallic_roughness, normal],
         [base_color_view, metallic_roughness_view, normal_view],
@@ -404,7 +537,7 @@ fn load_shader_program()
     Ok((vertex, pixel))
 }
 
-fn encode_material_constants(descriptor: PbrMaterialDesc) -> [u8; 256] {
+fn encode_material_constants(descriptor: PbrMaterialDesc, advanced_lighting: bool) -> [u8; 256] {
     let mut bytes = [0_u8; 256];
     let values = [
         descriptor.base_color_linear[0],
@@ -418,7 +551,7 @@ fn encode_material_constants(descriptor: PbrMaterialDesc) -> [u8; 256] {
         descriptor.normal_scale,
         descriptor.exposure,
         1.0 / 2048.0,
-        0.0,
+        if advanced_lighting { 1.0 } else { 0.0 },
     ];
     for (index, value) in values.into_iter().enumerate() {
         let offset = index * std::mem::size_of::<f32>();
@@ -432,12 +565,21 @@ fn create_texture(
     format: ApplicationTextureFormat,
     mip_chain: &[Vec<u8>],
 ) -> nord_app::ApplicationResult<(ApplicationGpuResourceHandle, ApplicationDescriptorHandle)> {
+    create_texture_with_mips(renderer, format, TEXTURE_SIZE, mip_chain)
+}
+
+fn create_texture_with_mips(
+    renderer: &mut ApplicationRenderer,
+    format: ApplicationTextureFormat,
+    size: u32,
+    mip_chain: &[Vec<u8>],
+) -> nord_app::ApplicationResult<(ApplicationGpuResourceHandle, ApplicationDescriptorHandle)> {
     let mip_levels = u16::try_from(mip_chain.len())
         .map_err(ApplicationDiagnosticError::msg)
         .context("validating a game material texture mip count")?;
     let description = ApplicationTextureDesc::new(
-        TEXTURE_SIZE,
-        TEXTURE_SIZE,
+        size,
+        size,
         format,
         ApplicationTextureUsage::SAMPLED.union(ApplicationTextureUsage::COPY_DESTINATION),
     )?
@@ -446,7 +588,7 @@ fn create_texture(
         .create_texture(description)
         .map_err(ApplicationDiagnosticError::msg)
         .context("allocating a game PBR texture")?;
-    let mut width = TEXTURE_SIZE;
+    let mut width = size;
     for (level, pixels) in mip_chain.iter().enumerate() {
         let level = u16::try_from(level)
             .map_err(ApplicationDiagnosticError::msg)
@@ -481,8 +623,8 @@ fn build_procedural_material_maps() -> [Vec<Vec<u8>>; 3] {
 
             let u = texture_coordinate(x);
             let v = texture_coordinate(y);
-            let roughness = 0.40 + 0.18 * (u * std::f32::consts::TAU * 3.0).sin().abs();
-            let metallic = if (x / 16) % 2 == 0 { 0.92 } else { 0.62 };
+            let roughness = 1.0;
+            let metallic = 0.0;
             metallic_roughness.extend([
                 255,
                 linear_unorm_byte(roughness),
@@ -515,9 +657,13 @@ enum TextureMipKind {
     Normal,
 }
 
-fn generate_mips(mut pixels: Vec<u8>, kind: TextureMipKind) -> Vec<Vec<u8>> {
-    let mut levels = Vec::with_capacity(usize::from(TEXTURE_MIP_LEVELS));
-    let mut width = TEXTURE_SIZE;
+fn generate_mips(pixels: Vec<u8>, kind: TextureMipKind) -> Vec<Vec<u8>> {
+    generate_mips_from_size(pixels, kind, TEXTURE_SIZE)
+}
+
+fn generate_mips_from_size(mut pixels: Vec<u8>, kind: TextureMipKind, size: u32) -> Vec<Vec<u8>> {
+    let mut levels = Vec::with_capacity(size.ilog2() as usize + 1);
+    let mut width = size;
     levels.push(pixels.clone());
     while width > 1 {
         let next_width = width / 2;

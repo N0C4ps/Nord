@@ -5,7 +5,7 @@ mod camera;
 mod gameloop;
 mod physics;
 mod render;
-mod world;
+pub mod world;
 
 use std::process::ExitCode;
 

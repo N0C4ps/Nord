@@ -147,6 +147,24 @@ float4 PSMain(VertexOutput input) : SV_Target0
     // is authored and multiplied in linear light, as required by glTF.
     const float4 baseSample = baseColorTexture.Sample(materialSampler, input.texCoord);
     const float3 baseColor = max(baseSample.rgb * baseColorFactor.rgb * input.instanceTint, 0.0);
+    if (materialOptions.w < 0.5)
+    {
+        // Voxel terrain uses a matte diffuse path: skip material-map reads,
+        // GGX, and shadow-map PCF for every visible terrain pixel.
+        const float3 diffuseNormal = normalize(input.worldNormal);
+        const float3 diffuseLight = normalize(float3(-0.45, 0.72, -0.52));
+        const float normalLight = saturate(dot(diffuseNormal, diffuseLight));
+        const float hemisphere = saturate(diffuseNormal.y * 0.5 + 0.5);
+        const float3 ambientIrradiance = lerp(
+            float3(0.035, 0.045, 0.065),
+            float3(0.19, 0.22, 0.28),
+            hemisphere);
+        const float3 diffuseRadiance = baseColor * (
+            float3(3.8, 3.55, 3.2) * normalLight + ambientIrradiance) / PI;
+        const float3 diffuseDisplay = LinearToSrgb(ToneMapAces(
+            max(diffuseRadiance * materialOptions.y, 0.0)));
+        return float4(diffuseDisplay, 1.0);
+    }
     const float4 metallicRoughness = metallicRoughnessTexture.Sample(materialSampler, input.texCoord);
     const float metallic = saturate(materialFactors.x * metallicRoughness.b);
     const float perceptualRoughness = clamp(

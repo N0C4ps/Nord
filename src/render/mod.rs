@@ -1,32 +1,38 @@
 mod crosshair;
+mod fps_hud;
 mod gpu_driven;
 mod material;
 mod occlusion;
 mod shadows;
 mod sky;
 mod visibility;
+mod voxel;
 
 use self::crosshair::Crosshair;
+use self::fps_hud::FpsHud;
 use self::gpu_driven::GpuDrivenCulling;
-use self::material::{PbrMaterial, PbrMaterialDesc};
+use self::material::{BlockTextureMaterials, PbrMaterial, PbrMaterialDesc};
 use self::occlusion::HiZOcclusion;
 use self::shadows::DirectionalShadowMap;
 use self::sky::Sky;
 use self::visibility::{CullingMetrics, DrawRange, GameScene};
+use self::voxel::{VoxelDraw, VoxelRenderer};
 use crate::camera::GameCameraController;
 use nord_app::{
     ApplicationBufferDesc, ApplicationBufferMemory, ApplicationBufferUsage, ApplicationClearColor,
     ApplicationColorAttachmentBinding, ApplicationDescriptorHandle, ApplicationDiagnosticError,
-    ApplicationDrawCall, ApplicationErrorContext, ApplicationJobSystem, ApplicationMat4 as Mat4,
-    ApplicationPipelineDescriptorBinding, ApplicationPlatform, ApplicationQuat as Quat,
-    ApplicationRenderConfig, ApplicationRenderQueue, ApplicationRenderTargetDesc,
+    ApplicationDrawCall, ApplicationErrorContext, ApplicationFrustum3 as Frustum3,
+    ApplicationGpuFrameTiming, ApplicationJobSystem, ApplicationMat4 as Mat4,
+    ApplicationPipelineDescriptorBinding, ApplicationPlatform, ApplicationRenderConfig,
+    ApplicationRenderQueue, ApplicationRenderQueueTiming, ApplicationRenderTargetDesc,
     ApplicationRenderer, ApplicationResourceUsage, ApplicationShaderBindingKind,
-    ApplicationTextureFormat, ApplicationVec2 as Vec2, ApplicationVec3 as Vec3,
-    ApplicationVec4 as Vec4, ApplicationVertexBufferBinding, ApplicationViewport,
-    ApplicationWindowHandle,
+    ApplicationShutdownMode, ApplicationTaskScheduler, ApplicationTextureFormat,
+    ApplicationVec2 as Vec2, ApplicationVec3 as Vec3, ApplicationVec4 as Vec4,
+    ApplicationVertexBufferBinding, ApplicationViewport, ApplicationWindowHandle,
 };
 use nord_camera::PerspectiveCamera;
 use nord_mesh::{IndexedMesh, MeshVertex};
+use nord_world::BlockPosition;
 
 const CLEAR_COLOR: ApplicationClearColor = ApplicationClearColor::rgba(0.025, 0.035, 0.055, 1.0);
 const VERTEX_STRIDE: u32 = 48;
@@ -35,6 +41,16 @@ const CONSTANT_BUFFER_BYTES: usize = 512;
 const GAME_UV_TILE_COUNT: f32 = 2.0;
 const RENDER_BENCHMARK_WARMUP_FRAMES: usize = 16;
 const RENDER_BENCHMARK_MEASURED_FRAMES: usize = 80;
+
+#[derive(Clone, Copy)]
+struct BenchmarkFrame {
+    frame_ns: u128,
+    graph_ns: u128,
+    present_ns: u128,
+    stream_ns: u128,
+    mesh_sync_ns: u128,
+    queue: ApplicationRenderQueueTiming,
+}
 
 /// Surface-sized game output and its depth buffer.
 #[derive(Clone, Copy)]
@@ -75,8 +91,18 @@ fn surface_resize_action(
 }
 
 /// Game-owned policy that connects Nord's generic renderer to the app loop.
+pub(crate) struct GameRenderServices {
+    pub(crate) jobs: ApplicationJobSystem,
+    pub(crate) scheduler: ApplicationTaskScheduler,
+    pub(crate) chunks_above_origin: i32,
+    pub(crate) chunks_below_origin: i32,
+}
+
 pub(super) struct GameRenderer {
     jobs: ApplicationJobSystem,
+    scheduler: ApplicationTaskScheduler,
+    voxel_world: crate::world::VoxelWorld,
+    chunk_streamer: crate::world::ChunkStreamer,
     _cpu_memory_reservation: nord_app::ApplicationMemoryReservation,
     renderer: Option<ApplicationRenderer>,
     surface: GameSurface,
@@ -91,7 +117,7 @@ pub(super) struct GameRenderer {
     gpu_culling: GpuDrivenCulling,
     occlusion: Option<HiZOcclusion>,
     benchmark_pending: bool,
-    benchmark_samples: Vec<u128>,
+    benchmark_samples: Vec<BenchmarkFrame>,
     cpu_culling_baseline: CullingMetrics,
     gpu_validation_pending: bool,
     camera_buffer: nord_app::ApplicationGpuResourceHandle,
@@ -99,8 +125,12 @@ pub(super) struct GameRenderer {
     camera: GameCameraController,
     model: Mat4,
     crosshair: Crosshair,
+    fps_hud: FpsHud,
     sky: Sky,
     material: PbrMaterial,
+    block_textures: BlockTextureMaterials,
+    voxel_renderer: VoxelRenderer,
+    demo_scene_enabled: bool,
     shadows: DirectionalShadowMap,
     shadow_visibility_mask: Vec<u8>,
     shadow_draw_ranges: Vec<DrawRange>,
@@ -136,30 +166,54 @@ impl GameRenderer {
         window: ApplicationWindowHandle,
         width: u32,
         height: u32,
-        jobs: ApplicationJobSystem,
+        services: GameRenderServices,
         memory: &nord_app::ApplicationMemoryManager,
     ) -> nord_app::ApplicationResult<Self> {
+        let GameRenderServices { jobs, scheduler, chunks_above_origin, chunks_below_origin } =
+            services;
+        let demo_scene_enabled =
+            std::env::var("NORD_RENDER_DEMO_SCENE").is_ok_and(|value| value == "1");
+        let vertical_sync = std::env::var("NORD_VSYNC")
+            .is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true"));
         let aspect_ratio = surface_aspect(width, height)?;
         let camera = GameCameraController::new(create_game_camera(aspect_ratio)?, window);
+        let voxel_world = crate::world::VoxelWorld::with_vertical_bounds(
+            crate::world::BlockRegistry::built_in()
+                .map_err(ApplicationDiagnosticError::msg)
+                .context("loading the built-in game block registry")?,
+            chunks_above_origin,
+            chunks_below_origin,
+        );
+        let chunk_streamer = crate::world::ChunkStreamer::new(
+            crate::world::ChunkStreamConfig::new(chunks_above_origin, chunks_below_origin),
+            &voxel_world,
+        );
         let mut renderer = ApplicationRenderer::initialize(
             platform,
             window,
-            ApplicationRenderConfig::new(width, height),
+            ApplicationRenderConfig::new(width, height).with_vertical_sync(vertical_sync),
         )
         .map_err(ApplicationDiagnosticError::msg)
         .context("initializing Nord's graphics infrastructure")?;
         let material = PbrMaterial::load(
             &mut renderer,
-            PbrMaterialDesc::new([0.74, 0.43, 0.19], 0.92, 0.82, 0.78, 1.0)?,
+            PbrMaterialDesc::new([1.0, 1.0, 1.0], 0.0, 1.0, 0.0, 1.0)?,
+            demo_scene_enabled,
         )?;
+        let block_textures = BlockTextureMaterials::create(&mut renderer)?;
+        let voxel_renderer = VoxelRenderer::create(&mut renderer)?;
         let crosshair = Crosshair::create(&mut renderer, width, height)?;
+        let fps_hud = FpsHud::create(&mut renderer)?;
         let sky = Sky::create(&mut renderer)?;
-        let shadows = DirectionalShadowMap::create(&mut renderer)?;
+        let shadows = DirectionalShadowMap::create(
+            &mut renderer,
+            if demo_scene_enabled { DirectionalShadowMap::resolution() } else { 1 },
+        )?;
         let mesh = make_test_cube()?;
-        let model = test_cube_transform()?;
+        let model = Mat4::IDENTITY;
         let mesh_gpu = Self::upload_test_mesh(&mut renderer, &mesh)?;
-        let occlusion_probe_enabled =
-            std::env::var("NORD_OCCLUSION_STRESS_SCENE").is_ok_and(|value| value == "1");
+        let occlusion_probe_enabled = demo_scene_enabled
+            && std::env::var("NORD_OCCLUSION_STRESS_SCENE").is_ok_and(|value| value == "1");
         let instance_capacity = GameScene::demo_instance_count()
             .checked_add(if occlusion_probe_enabled { 8 } else { 0 })
             .ok_or_else(|| {
@@ -209,7 +263,7 @@ impl GameRenderer {
         )?;
         let (camera_buffer, camera_binding) = Self::create_camera_buffer(&mut renderer)?;
         let surface = Self::create_surface(&mut renderer, width, height)?;
-        let occlusion_enabled = occlusion_culling_enabled();
+        let occlusion_enabled = demo_scene_enabled && occlusion_culling_enabled();
         let occlusion = if occlusion_enabled {
             Some(HiZOcclusion::create(&mut renderer, width, height)?)
         } else {
@@ -235,7 +289,7 @@ impl GameRenderer {
             })?,
             vector_capacity_bytes::<u8>(shadow_visibility_mask.capacity())?,
             vector_capacity_bytes::<DrawRange>(shadow_draw_ranges.capacity())?,
-            vector_capacity_bytes::<u128>(benchmark_samples.capacity())?,
+            vector_capacity_bytes::<BenchmarkFrame>(benchmark_samples.capacity())?,
         ]
         .into_iter()
         .try_fold(0_u64, u64::checked_add)
@@ -298,6 +352,9 @@ impl GameRenderer {
         );
         Ok(Self {
             jobs,
+            scheduler,
+            voxel_world,
+            chunk_streamer,
             _cpu_memory_reservation: cpu_memory_reservation,
             renderer: Some(renderer),
             surface,
@@ -314,14 +371,19 @@ impl GameRenderer {
             benchmark_pending: std::env::var_os("NORD_RENDER_BENCHMARK").is_some(),
             benchmark_samples,
             cpu_culling_baseline: initial_metrics,
-            gpu_validation_pending: std::env::var_os("NORD_GPU_DRIVEN_VALIDATE").is_some(),
+            gpu_validation_pending: demo_scene_enabled
+                && std::env::var_os("NORD_GPU_DRIVEN_VALIDATE").is_some(),
             camera_buffer,
             camera_binding,
             camera,
             model,
             crosshair,
+            fps_hud,
             sky,
             material,
+            block_textures,
+            voxel_renderer,
+            demo_scene_enabled,
             shadows,
             shadow_visibility_mask,
             shadow_draw_ranges,
@@ -484,7 +546,11 @@ impl GameRenderer {
         })
     }
 
-    pub(super) fn render_frame(&mut self) -> nord_app::ApplicationResult<()> {
+    pub(super) fn render_frame(
+        &mut self,
+        fps: Option<nord_app::ApplicationFpsSnapshot>,
+    ) -> nord_app::ApplicationResult<()> {
+        let frame_start = self.benchmark_pending.then(std::time::Instant::now);
         let camera_buffer = self.camera_buffer;
         let view_projection = self
             .camera
@@ -494,16 +560,66 @@ impl GameRenderer {
             .context("building the game's view-projection matrix")?;
         let frustum_planes = visibility::extract_frustum_planes(view_projection)
             .ok_or_else(|| ApplicationDiagnosticError::msg("camera frustum planes are invalid"))?;
+        let camera_position = self.camera.camera().position();
+        let focus = BlockPosition::new(
+            floor_block_coordinate(camera_position.x)?,
+            floor_block_coordinate(camera_position.y)?,
+            floor_block_coordinate(camera_position.z)?,
+        );
+        let previous_stream_focus = self.chunk_streamer.snapshot().focus_chunk;
+        let stream_start = frame_start.map(|_| std::time::Instant::now());
+        let stream_snapshot = self.chunk_streamer.update(
+            &mut self.voxel_world,
+            &self.scheduler,
+            focus,
+            Frustum3::from_planes(frustum_planes),
+        );
+        let stream_ns = stream_start.map_or(0, |start| start.elapsed().as_nanos());
+        let frustum = Frustum3::from_planes(frustum_planes);
+        if previous_stream_focus != stream_snapshot.focus_chunk {
+            nord_app::info!(
+                name: "voxel_chunk_stream_focus_changed",
+                target: "nord::world::streaming",
+                focus_chunk = ?stream_snapshot.focus_chunk,
+                desired_chunks = stream_snapshot.desired_chunks,
+                visible_desired_chunks = stream_snapshot.visible_desired_chunks,
+                load_radius_chunks = 8,
+                vertical_load_radius_chunks = 2,
+                "Updated the desired flat-world chunk region"
+            );
+        }
+        let mesh_sync_start = frame_start.map(|_| std::time::Instant::now());
+        if let Some(renderer) = self.renderer.as_mut() {
+            self.voxel_renderer.sync(
+                renderer,
+                &mut self.voxel_world,
+                &self.block_textures,
+                focus.chunk(),
+            )?;
+        }
+        let mesh_sync_ns = mesh_sync_start.map_or(0, |start| start.elapsed().as_nanos());
+        let voxel_draws = self.voxel_renderer.visible_draws(frustum);
+        let visible_voxel_draws = voxel_draws.len();
+        let benchmark_start = frame_start.filter(|_| {
+            self.benchmark_pending
+                && stream_snapshot.loaded_chunks == stream_snapshot.desired_chunks
+                && stream_snapshot.generation_jobs == 0
+                && !self.voxel_renderer.has_pending_meshes()
+        });
         let light_view_projection =
             shadows::directional_light_view_projection().ok_or_else(|| {
                 ApplicationDiagnosticError::msg("directional light projection is invalid")
             })?;
-        let _shadow_visibility_metrics = self.scene.update_visibility(
-            light_view_projection,
-            &mut self.shadow_visibility_mask,
-            &mut self.shadow_draw_ranges,
-        );
-        let shadow_draw_ranges = self.shadow_draw_ranges.clone();
+        let shadow_draw_ranges = if self.demo_scene_enabled {
+            self.scene.update_visibility(
+                light_view_projection,
+                &mut self.shadow_visibility_mask,
+                &mut self.shadow_draw_ranges,
+            );
+            self.shadow_draw_ranges.clone()
+        } else {
+            Vec::new()
+        };
         let normal_model =
             self.model.inverse().map(Mat4::transpose).ok_or_else(|| {
                 ApplicationDiagnosticError::msg("game object transform is singular")
@@ -523,19 +639,41 @@ impl GameRenderer {
             .write_buffer(camera_buffer, 0, &constants)
             .map_err(ApplicationDiagnosticError::msg)
             .context("updating the game's per-frame camera and model matrices")?;
-        self.gpu_culling.update_constants(
+        let fps_vertex_count = self.fps_hud.update(
             renderer,
-            frustum_planes,
-            view_projection,
-            self.occlusion.as_ref().map_or(1, HiZOcclusion::mip_count),
+            self.surface.width,
+            self.surface.height,
+            fps.map(|snapshot| snapshot.frames_per_second),
         )?;
-        self.submit_pbr_mesh_pass(shadow_draw_ranges)
+        if self.demo_scene_enabled {
+            self.gpu_culling.update_constants(
+                renderer,
+                frustum_planes,
+                view_projection,
+                self.occlusion.as_ref().map_or(1, HiZOcclusion::mip_count),
+            )?;
+        }
+        self.submit_pbr_mesh_pass(
+            shadow_draw_ranges,
+            voxel_draws,
+            visible_voxel_draws,
+            benchmark_start,
+            fps_vertex_count,
+            stream_ns,
+            mesh_sync_ns,
+        )
     }
 
     #[allow(clippy::too_many_lines)] // One render-graph pass owns its declarations, encoding and submission.
     fn submit_pbr_mesh_pass(
         &mut self,
         shadow_draw_ranges: Vec<DrawRange>,
+        voxel_draws: std::sync::Arc<[VoxelDraw]>,
+        visible_voxel_draws: usize,
+        benchmark_start: Option<std::time::Instant>,
+        fps_vertex_count: u32,
+        stream_ns: u128,
+        mesh_sync_ns: u128,
     ) -> nord_app::ApplicationResult<()> {
         let renderer = self
             .renderer
@@ -557,6 +695,9 @@ impl GameRenderer {
         let material_constants = self.material.constants_resource();
         let material_textures = self.material.texture_resources();
         let material_bindings = *self.material.bindings();
+        let voxel_instance_buffer = self.voxel_renderer.instance_buffer();
+        let voxel_instance_size = self.voxel_renderer.instance_size();
+        let draw_demo_scene = self.demo_scene_enabled;
         let shadow_map = self.shadows.resources();
         let shadow_pipeline = self.shadows.pipeline().clone();
         let shadow_vertex_shader = self.shadows.vertex_shader().clone();
@@ -566,6 +707,10 @@ impl GameRenderer {
         let crosshair_pipeline = self.crosshair.pipeline().clone();
         let crosshair_vertex_shader = self.crosshair.vertex_shader().clone();
         let crosshair_pixel_shader = self.crosshair.pixel_shader().clone();
+        let fps_pipeline = self.fps_hud.pipeline().clone();
+        let fps_vertex_shader = self.fps_hud.vertex_shader().clone();
+        let fps_pixel_shader = self.fps_hud.pixel_shader().clone();
+        let fps_vertex_buffer = self.fps_hud.vertex_buffer();
         let crosshair_blit_pipeline = self.crosshair.blit_pipeline().clone();
         let crosshair_blit_vertex_shader = self.crosshair.blit_vertex_shader().clone();
         let crosshair_blit_pixel_shader = self.crosshair.blit_pixel_shader().clone();
@@ -579,153 +724,163 @@ impl GameRenderer {
         let pixel_shader = self.material.pixel_shader().clone();
         let viewport_width = exact_surface_extent(surface.width)?;
         let viewport_height = exact_surface_extent(surface.height)?;
-        let shadow_extent = exact_surface_extent(DirectionalShadowMap::resolution())?;
-        let mut queue = ApplicationRenderQueue::new();
-        if let Some(occlusion) = &self.occlusion {
-            self.gpu_culling.enqueue_compute_passes(&mut queue)?;
-            occlusion.enqueue_depth_prepass(
-                &mut queue,
-                camera_buffer,
-                camera_binding,
-                vertex_buffer,
-                vertex_buffer_size,
-                index_buffer,
-                index_buffer_size,
-                index_count,
-                visible_instances,
-                visible_instances_size,
-                indirect_arguments,
-                maximum_instances,
-            )?;
-            occlusion.enqueue_build_passes(&mut queue)?;
-            self.gpu_culling.enqueue_initialize_pass(&mut queue)?;
-            self.gpu_culling.enqueue_hiz_cull_pass(
-                &mut queue,
-                &occlusion.hiz_resources(),
-                occlusion.hiz_views(),
-                occlusion.mip_count(),
-            )?;
-        } else {
-            self.gpu_culling.enqueue_compute_passes(&mut queue)?;
+        let shadow_extent = exact_surface_extent(self.shadows.active_resolution())?;
+        let mut queue = ApplicationRenderQueue::new().with_inline_encoding();
+        if draw_demo_scene {
+            if let Some(occlusion) = &self.occlusion {
+                self.gpu_culling.enqueue_compute_passes(&mut queue)?;
+                occlusion.enqueue_depth_prepass(
+                    &mut queue,
+                    camera_buffer,
+                    camera_binding,
+                    vertex_buffer,
+                    vertex_buffer_size,
+                    index_buffer,
+                    index_buffer_size,
+                    index_count,
+                    visible_instances,
+                    visible_instances_size,
+                    indirect_arguments,
+                    maximum_instances,
+                )?;
+                occlusion.enqueue_build_passes(&mut queue)?;
+                self.gpu_culling.enqueue_initialize_pass(&mut queue)?;
+                self.gpu_culling.enqueue_hiz_cull_pass(
+                    &mut queue,
+                    &occlusion.hiz_resources(),
+                    occlusion.hiz_views(),
+                    occlusion.mip_count(),
+                )?;
+            } else {
+                self.gpu_culling.enqueue_compute_passes(&mut queue)?;
+            }
         }
-        queue
-            .enqueue(
-                nord_app::ApplicationRenderPassDesc::new("Nord directional shadow depth")
-                    .use_resource(shadow_map.color, ApplicationResourceUsage::ColorAttachmentWrite)
-                    .use_resource(shadow_map.depth, ApplicationResourceUsage::DepthAttachmentWrite)
-                    .use_resource(vertex_buffer, ApplicationResourceUsage::VertexBufferRead)
-                    .use_resource(index_buffer, ApplicationResourceUsage::IndexBufferRead)
-                    .use_resource(instance_buffer, ApplicationResourceUsage::VertexBufferRead)
-                    .use_resource(camera_buffer, ApplicationResourceUsage::ConstantBufferRead),
-                move |encoder| {
-                    encoder.begin_graphics_pass_with_attachments(
-                        &[ApplicationColorAttachmentBinding {
-                            resource: shadow_map.color,
-                            view: shadow_map.color_view,
-                            clear_color: ApplicationClearColor::rgba(1.0, 1.0, 1.0, 1.0),
-                        }],
-                        Some((shadow_map.depth, shadow_map.depth_view)),
-                        1.0,
-                        Some(ApplicationViewport::new(0.0, 0.0, shadow_extent, shadow_extent)),
-                        None,
-                    )?;
-                    for range in shadow_draw_ranges {
-                        encoder.draw(
-                            &shadow_pipeline,
-                            &shadow_vertex_shader,
-                            &shadow_pixel_shader,
-                            &[camera_binding],
-                            &[
-                                ApplicationVertexBufferBinding {
-                                    slot: 0,
-                                    buffer: vertex_buffer,
-                                    offset: 0,
-                                    size: vertex_buffer_size,
-                                    stride: VERTEX_STRIDE,
-                                },
-                                ApplicationVertexBufferBinding {
-                                    slot: 1,
-                                    buffer: instance_buffer,
-                                    offset: 0,
-                                    size: instance_buffer_size,
-                                    stride: INSTANCE_STRIDE,
-                                },
-                            ],
-                            Some(nord_app::ApplicationIndexBufferBinding {
-                                buffer: index_buffer,
-                                offset: 0,
-                                size: index_buffer_size,
-                                format: nord_app::ApplicationIndexFormat::Uint16,
-                            }),
-                            nord_app::ApplicationDrawCall::Indexed {
-                                index_count,
-                                instance_count: range.instance_count,
-                                first_index: 0,
-                                base_vertex: 0,
-                                first_instance: range.first_instance,
-                            },
+        if draw_demo_scene {
+            queue
+                .enqueue(
+                    nord_app::ApplicationRenderPassDesc::new("Nord directional shadow depth")
+                        .use_resource(
+                            shadow_map.color,
+                            ApplicationResourceUsage::ColorAttachmentWrite,
+                        )
+                        .use_resource(
+                            shadow_map.depth,
+                            ApplicationResourceUsage::DepthAttachmentWrite,
+                        )
+                        .use_resource(vertex_buffer, ApplicationResourceUsage::VertexBufferRead)
+                        .use_resource(index_buffer, ApplicationResourceUsage::IndexBufferRead)
+                        .use_resource(instance_buffer, ApplicationResourceUsage::VertexBufferRead)
+                        .use_resource(camera_buffer, ApplicationResourceUsage::ConstantBufferRead),
+                    move |encoder| {
+                        encoder.begin_graphics_pass_with_attachments(
+                            &[ApplicationColorAttachmentBinding {
+                                resource: shadow_map.color,
+                                view: shadow_map.color_view,
+                                clear_color: ApplicationClearColor::rgba(1.0, 1.0, 1.0, 1.0),
+                            }],
+                            Some((shadow_map.depth, shadow_map.depth_view)),
+                            1.0,
+                            Some(ApplicationViewport::new(0.0, 0.0, shadow_extent, shadow_extent)),
+                            None,
                         )?;
-                    }
-                    encoder.end_graphics_pass()?;
-                    Ok(())
-                },
-            )
-            .map_err(|error| ApplicationDiagnosticError::msg(format!("{error:?}")))
-            .context("encoding the game's directional-light shadow depth pass")?;
+                        for range in shadow_draw_ranges {
+                            encoder.draw(
+                                &shadow_pipeline,
+                                &shadow_vertex_shader,
+                                &shadow_pixel_shader,
+                                &[camera_binding],
+                                &[
+                                    ApplicationVertexBufferBinding {
+                                        slot: 0,
+                                        buffer: vertex_buffer,
+                                        offset: 0,
+                                        size: vertex_buffer_size,
+                                        stride: VERTEX_STRIDE,
+                                    },
+                                    ApplicationVertexBufferBinding {
+                                        slot: 1,
+                                        buffer: instance_buffer,
+                                        offset: 0,
+                                        size: instance_buffer_size,
+                                        stride: INSTANCE_STRIDE,
+                                    },
+                                ],
+                                Some(nord_app::ApplicationIndexBufferBinding {
+                                    buffer: index_buffer,
+                                    offset: 0,
+                                    size: index_buffer_size,
+                                    format: nord_app::ApplicationIndexFormat::Uint16,
+                                }),
+                                nord_app::ApplicationDrawCall::Indexed {
+                                    index_count,
+                                    instance_count: range.instance_count,
+                                    first_index: 0,
+                                    base_vertex: 0,
+                                    first_instance: range.first_instance,
+                                },
+                            )?;
+                        }
+                        encoder.end_graphics_pass()?;
+                        Ok(())
+                    },
+                )
+                .map_err(|error| ApplicationDiagnosticError::msg(format!("{error:?}")))
+                .context("encoding the game's directional-light shadow depth pass")?;
+        }
+        let mut pbr_pass =
+            nord_app::ApplicationRenderPassDesc::new("Nord metallic-roughness PBR mesh")
+                .use_resource(surface.scene_color, ApplicationResourceUsage::ColorAttachmentWrite)
+                .use_resource(surface.depth, ApplicationResourceUsage::DepthAttachmentWrite)
+                .use_resource(camera_buffer, ApplicationResourceUsage::ConstantBufferRead)
+                .use_resource(material_constants, ApplicationResourceUsage::ConstantBufferRead)
+                .use_resource(material_textures[0], ApplicationResourceUsage::SampledRead)
+                .use_resource(material_textures[1], ApplicationResourceUsage::SampledRead)
+                .use_resource(material_textures[2], ApplicationResourceUsage::SampledRead)
+                .use_resource(shadow_map.color, ApplicationResourceUsage::SampledRead)
+                .use_resource(sky_buffer, ApplicationResourceUsage::VertexBufferRead)
+                .use_resource(voxel_instance_buffer, ApplicationResourceUsage::VertexBufferRead);
+        if draw_demo_scene {
+            pbr_pass = pbr_pass
+                .use_resource(vertex_buffer, ApplicationResourceUsage::VertexBufferRead)
+                .use_resource(index_buffer, ApplicationResourceUsage::IndexBufferRead)
+                .use_resource(visible_instances, ApplicationResourceUsage::VertexBufferRead)
+                .use_resource(indirect_arguments, ApplicationResourceUsage::IndirectArgumentRead);
+        }
+        let pbr_pass = voxel::declare_draw_resources(pbr_pass, &voxel_draws, &self.block_textures);
         queue
-            .enqueue(
-                nord_app::ApplicationRenderPassDesc::new("Nord metallic-roughness PBR mesh")
-                    .use_resource(
-                        surface.scene_color,
-                        ApplicationResourceUsage::ColorAttachmentWrite,
-                    )
-                    .use_resource(surface.depth, ApplicationResourceUsage::DepthAttachmentWrite)
-                    .use_resource(vertex_buffer, ApplicationResourceUsage::VertexBufferRead)
-                    .use_resource(index_buffer, ApplicationResourceUsage::IndexBufferRead)
-                    .use_resource(visible_instances, ApplicationResourceUsage::VertexBufferRead)
-                    .use_resource(
-                        indirect_arguments,
-                        ApplicationResourceUsage::IndirectArgumentRead,
-                    )
-                    .use_resource(camera_buffer, ApplicationResourceUsage::ConstantBufferRead)
-                    .use_resource(material_constants, ApplicationResourceUsage::ConstantBufferRead)
-                    .use_resource(material_textures[0], ApplicationResourceUsage::SampledRead)
-                    .use_resource(material_textures[1], ApplicationResourceUsage::SampledRead)
-                    .use_resource(material_textures[2], ApplicationResourceUsage::SampledRead)
-                    .use_resource(shadow_map.color, ApplicationResourceUsage::SampledRead)
-                    .use_resource(sky_buffer, ApplicationResourceUsage::VertexBufferRead),
-                move |encoder| {
-                    encoder.begin_graphics_pass_with_attachments(
-                        &[ApplicationColorAttachmentBinding {
-                            resource: surface.scene_color,
-                            view: surface.scene_color_view,
-                            clear_color: CLEAR_COLOR,
-                        }],
-                        Some((surface.depth, surface.depth_view)),
-                        1.0,
-                        Some(ApplicationViewport::new(0.0, 0.0, viewport_width, viewport_height)),
-                        None,
-                    )?;
-                    encoder.draw(
-                        &sky_pipeline,
-                        &sky_vertex_shader,
-                        &sky_pixel_shader,
-                        &[],
-                        &[ApplicationVertexBufferBinding {
-                            slot: 0,
-                            buffer: sky_buffer,
-                            offset: 0,
-                            size: 120,
-                            stride: 20,
-                        }],
-                        None,
-                        ApplicationDrawCall::Vertices {
-                            vertex_count: 6,
-                            instance_count: 1,
-                            first_vertex: 0,
-                            first_instance: 0,
-                        },
-                    )?;
+            .enqueue(pbr_pass, move |encoder| {
+                encoder.begin_graphics_pass_with_attachments(
+                    &[ApplicationColorAttachmentBinding {
+                        resource: surface.scene_color,
+                        view: surface.scene_color_view,
+                        clear_color: CLEAR_COLOR,
+                    }],
+                    Some((surface.depth, surface.depth_view)),
+                    1.0,
+                    Some(ApplicationViewport::new(0.0, 0.0, viewport_width, viewport_height)),
+                    None,
+                )?;
+                encoder.draw(
+                    &sky_pipeline,
+                    &sky_vertex_shader,
+                    &sky_pixel_shader,
+                    &[],
+                    &[ApplicationVertexBufferBinding {
+                        slot: 0,
+                        buffer: sky_buffer,
+                        offset: 0,
+                        size: 120,
+                        stride: 20,
+                    }],
+                    None,
+                    ApplicationDrawCall::Vertices {
+                        vertex_count: 6,
+                        instance_count: 1,
+                        first_vertex: 0,
+                        first_instance: 0,
+                    },
+                )?;
+                if draw_demo_scene {
                     encoder.draw_indexed_indirect(
                         &pipeline,
                         &vertex_shader,
@@ -767,10 +922,57 @@ impl GameRenderer {
                         maximum_instances,
                         index_count,
                     )?;
-                    encoder.end_graphics_pass()?;
-                    Ok(())
-                },
-            )
+                }
+                for draw in voxel_draws.iter().copied() {
+                    let mut bindings = material_bindings;
+                    bindings[1].descriptor = draw.base_color_view;
+                    encoder.draw(
+                        &pipeline,
+                        &vertex_shader,
+                        &pixel_shader,
+                        &[
+                            camera_binding,
+                            bindings[0],
+                            bindings[1],
+                            bindings[2],
+                            bindings[3],
+                            bindings[4],
+                            shadow_binding,
+                        ],
+                        &[
+                            ApplicationVertexBufferBinding {
+                                slot: 0,
+                                buffer: draw.vertex,
+                                offset: 0,
+                                size: draw.vertex_size,
+                                stride: VERTEX_STRIDE,
+                            },
+                            ApplicationVertexBufferBinding {
+                                slot: 1,
+                                buffer: voxel_instance_buffer,
+                                offset: 0,
+                                size: voxel_instance_size,
+                                stride: INSTANCE_STRIDE,
+                            },
+                        ],
+                        Some(nord_app::ApplicationIndexBufferBinding {
+                            buffer: draw.index,
+                            offset: 0,
+                            size: draw.index_size,
+                            format: nord_app::ApplicationIndexFormat::Uint32,
+                        }),
+                        ApplicationDrawCall::Indexed {
+                            index_count: draw.index_count,
+                            instance_count: 1,
+                            first_index: 0,
+                            base_vertex: 0,
+                            first_instance: 0,
+                        },
+                    )?;
+                }
+                encoder.end_graphics_pass()?;
+                Ok(())
+            })
             .map_err(|error| ApplicationDiagnosticError::msg(format!("{error:?}")))
             .context("encoding the game's metallic-roughness PBR mesh pass")?;
         let scene_color_binding = ApplicationPipelineDescriptorBinding {
@@ -786,7 +988,8 @@ impl GameRenderer {
                 )
                 .use_resource(surface.scene_color, ApplicationResourceUsage::SampledRead)
                 .use_resource(surface.color, ApplicationResourceUsage::ColorAttachmentWrite)
-                .use_resource(crosshair_buffer, ApplicationResourceUsage::VertexBufferRead),
+                .use_resource(crosshair_buffer, ApplicationResourceUsage::VertexBufferRead)
+                .use_resource(fps_vertex_buffer, ApplicationResourceUsage::VertexBufferRead),
                 move |encoder| {
                     encoder.begin_graphics_pass_with_attachments(
                         &[ApplicationColorAttachmentBinding {
@@ -833,18 +1036,38 @@ impl GameRenderer {
                             first_instance: 0,
                         },
                     )?;
+                    encoder.draw(
+                        &fps_pipeline,
+                        &fps_vertex_shader,
+                        &fps_pixel_shader,
+                        &[],
+                        &[ApplicationVertexBufferBinding {
+                            slot: 0,
+                            buffer: fps_vertex_buffer,
+                            offset: 0,
+                            size: fps_vertex_count * 24,
+                            stride: 24,
+                        }],
+                        None,
+                        ApplicationDrawCall::Vertices {
+                            vertex_count: fps_vertex_count,
+                            instance_count: 1,
+                            first_vertex: 0,
+                            first_instance: 0,
+                        },
+                    )?;
                     encoder.end_graphics_pass()?;
                     Ok(())
                 },
             )
             .map_err(|error| ApplicationDiagnosticError::msg(format!("{error:?}")))
             .context("encoding the game's sampled-color crosshair composite")?;
-        let benchmark_frame = self.benchmark_pending;
-        let benchmark_start = std::time::Instant::now();
+        let graph_start = benchmark_start.map(|_| std::time::Instant::now());
         renderer
             .submit_render_queue(&mut queue, &self.jobs)
             .map_err(|error| ApplicationDiagnosticError::msg(format!("{error:?}")))
             .context("submitting the game's PBR mesh render graph")?;
+        let graph_ns = graph_start.map_or(0, |start| start.elapsed().as_nanos());
         if self.gpu_validation_pending {
             let culling_stats = self.gpu_culling.validate_gpu_output(renderer)?;
             nord_app::info!(
@@ -874,22 +1097,28 @@ impl GameRenderer {
             );
             self.shadow_pass_reported = true;
         }
+        let present_start = benchmark_start.map(|_| std::time::Instant::now());
         renderer
             .present_texture(surface.color)
             .map_err(ApplicationDiagnosticError::msg)
             .context("presenting the game's 3D mesh")?;
-        if benchmark_frame {
-            renderer
-                .wait_idle()
-                .map_err(ApplicationDiagnosticError::msg)
-                .context("waiting for GPU completion during render-path measurement")?;
+        let present_ns = present_start.map_or(0, |start| start.elapsed().as_nanos());
+        if let Some(benchmark_start) = benchmark_start {
             collect_render_benchmark(
                 renderer,
                 surface,
                 self.occlusion.is_some(),
                 &mut self.benchmark_samples,
                 &mut self.benchmark_pending,
-                benchmark_start.elapsed().as_nanos(),
+                BenchmarkFrame {
+                    frame_ns: benchmark_start.elapsed().as_nanos(),
+                    graph_ns,
+                    present_ns,
+                    stream_ns,
+                    mesh_sync_ns,
+                    queue: renderer.last_queue_timing(),
+                },
+                visible_voxel_draws,
             )?;
         }
         Ok(())
@@ -991,6 +1220,11 @@ impl GameRenderer {
     }
 
     pub(super) fn shutdown(&mut self) -> nord_app::ApplicationResult<()> {
+        self.chunk_streamer.cancel_all();
+        self.scheduler
+            .shutdown(ApplicationShutdownMode::CancelPending)
+            .map_err(ApplicationDiagnosticError::msg)
+            .context("cancelling pending chunk work before game shutdown")?;
         let Some(mut renderer) = self.renderer.take() else {
             return Ok(());
         };
@@ -998,6 +1232,8 @@ impl GameRenderer {
             .wait_idle()
             .map_err(ApplicationDiagnosticError::msg)
             .context("waiting for graphics work before game renderer shutdown")?;
+        self.voxel_renderer.shutdown(&mut renderer)?;
+        self.block_textures.shutdown(&mut renderer)?;
         self.material.shutdown(&mut renderer)?;
         self.shadows.shutdown(&mut renderer)?;
         if let Some(occlusion) = &self.occlusion {
@@ -1012,6 +1248,7 @@ impl GameRenderer {
             self.index_buffer,
             self.instance_buffer,
             self.camera_buffer,
+            self.fps_hud.vertex_buffer(),
         ] {
             renderer
                 .destroy_resource(resource)
@@ -1022,46 +1259,167 @@ impl GameRenderer {
     }
 }
 
+fn floor_block_coordinate(value: f32) -> nord_app::ApplicationResult<i32> {
+    if !value.is_finite() {
+        return Err(ApplicationDiagnosticError::msg(
+            "camera position cannot be converted to a block coordinate",
+        ));
+    }
+    let floored = f64::from(value).floor();
+    if floored < f64::from(i32::MIN) || floored > f64::from(i32::MAX) {
+        return Err(ApplicationDiagnosticError::msg(
+            "camera is outside the block coordinate range",
+        ));
+    }
+    #[allow(clippy::cast_possible_truncation)] // The finite range check above makes this exact.
+    Ok(floored as i32)
+}
+
 fn collect_render_benchmark(
     renderer: &mut ApplicationRenderer,
     surface: GameSurface,
     hiz_enabled: bool,
-    samples: &mut Vec<u128>,
+    samples: &mut Vec<BenchmarkFrame>,
     pending: &mut bool,
-    elapsed_ns: u128,
+    frame: BenchmarkFrame,
+    visible_voxel_draws: usize,
 ) -> nord_app::ApplicationResult<()> {
-    samples.push(elapsed_ns);
+    samples.push(frame);
     if samples.len() < RENDER_BENCHMARK_WARMUP_FRAMES + RENDER_BENCHMARK_MEASURED_FRAMES {
         return Ok(());
     }
-    let mut measured = samples[RENDER_BENCHMARK_WARMUP_FRAMES..].to_vec();
-    measured.sort_unstable();
-    let percentile = |percent: usize| -> u128 {
-        let rank = measured.len().saturating_mul(percent).div_ceil(100).max(1);
-        measured[rank - 1]
+    let measured = &samples[RENDER_BENCHMARK_WARMUP_FRAMES..];
+    let percentile = |percent: usize, select: fn(&BenchmarkFrame) -> u128| -> u128 {
+        let mut values = measured.iter().map(select).collect::<Vec<_>>();
+        values.sort_unstable();
+        let rank = values.len().saturating_mul(percent).div_ceil(100).max(1);
+        values[rank - 1].max(1)
     };
+    let p50_ns = percentile(50, |sample| sample.frame_ns);
+    let p95_ns = percentile(95, |sample| sample.frame_ns);
+    let p50_graph_ns = percentile(50, |sample| sample.graph_ns);
+    let p95_graph_ns = percentile(95, |sample| sample.graph_ns);
+    let p50_present_ns = percentile(50, |sample| sample.present_ns);
+    let p95_present_ns = percentile(95, |sample| sample.present_ns);
+    let p50_stream_ns = percentile(50, |sample| sample.stream_ns);
+    let p95_stream_ns = percentile(95, |sample| sample.stream_ns);
+    let p50_mesh_sync_ns = percentile(50, |sample| sample.mesh_sync_ns);
+    let p95_mesh_sync_ns = percentile(95, |sample| sample.mesh_sync_ns);
+    let p50_fps = 1_000_000_000.0 / p50_ns as f64;
+    let p95_fps = 1_000_000_000.0 / p95_ns as f64;
     let (width, height, pixels) = renderer
-        .read_texture_rgba8(surface.color)
+        .read_texture_rgba8(surface.scene_color)
         .map_err(ApplicationDiagnosticError::msg)
         .context("reading the completed frame for deterministic visual comparison")?;
     let checksum = pixels.iter().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
         (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)
     });
+    let gpu_frames = renderer
+        .take_gpu_frame_timings()
+        .map_err(ApplicationDiagnosticError::msg)
+        .context("collecting completed direct-queue GPU timestamps")?;
+    let gpu_measured = gpu_frames
+        .get(gpu_frames.len().saturating_sub(RENDER_BENCHMARK_MEASURED_FRAMES)..)
+        .unwrap_or(&[]);
+    let gpu_report = gpu_timing_report(gpu_measured);
+    let cpu_stages = cpu_queue_timing_report(measured);
     nord_app::info!(
         name: "render_path_comparison",
         target: "nord::render",
         path = if hiz_enabled { "same-frame-hiz" } else { "frustum-only" },
         warmup_frames = RENDER_BENCHMARK_WARMUP_FRAMES,
         measured_frames = RENDER_BENCHMARK_MEASURED_FRAMES,
-        p50_complete_frame_ns = percentile(50),
-        p95_complete_frame_ns = percentile(95),
+        p50_complete_frame_ns = p50_ns,
+        p95_complete_frame_ns = p95_ns,
+        p50_fps,
+        p95_fps,
         width,
         height,
+        visible_voxel_draws,
         visual_checksum = format!("{checksum:016x}"),
         "Render-path timing and output checksum captured for A/B comparison"
     );
+    let report = format!(
+        "{{\n  \"measurement\": \"steady_state_render_frame_cpu_and_direct_queue_gpu\",\n  \"vsync\": false,\n  \"gpu_drain_after_measurement\": true,\n  \"warmup_frames\": {RENDER_BENCHMARK_WARMUP_FRAMES},\n  \"measured_frames\": {RENDER_BENCHMARK_MEASURED_FRAMES},\n  \"p50_frame_ns\": {p50_ns},\n  \"p95_frame_ns\": {p95_ns},\n  \"p50_stream_ns\": {p50_stream_ns},\n  \"p95_stream_ns\": {p95_stream_ns},\n  \"p50_mesh_sync_ns\": {p50_mesh_sync_ns},\n  \"p95_mesh_sync_ns\": {p95_mesh_sync_ns},\n  \"p50_graph_ns\": {p50_graph_ns},\n  \"p95_graph_ns\": {p95_graph_ns},\n  \"p50_present_ns\": {p50_present_ns},\n  \"p95_present_ns\": {p95_present_ns},\n  \"p50_fps\": {p50_fps:.2},\n  \"p95_fps\": {p95_fps:.2},\n  \"width\": {width},\n  \"height\": {height},\n  \"visible_voxel_draws\": {visible_voxel_draws},\n  \"checksum_surface\": \"scene_color\",\n  \"visual_checksum\": \"{checksum:016x}\",\n  \"cpu_queue_stages\": {cpu_stages},\n  \"gpu\": {gpu_report}\n}}\n"
+    );
+    let output_path = std::env::current_exe().ok().and_then(|executable| {
+        executable.parent().map(|parent| parent.join("nord-render-benchmark.json"))
+    });
+    let output_result =
+        output_path.map(|path| std::fs::write(&path, report).map(|()| path)).transpose();
+    match output_result {
+        Ok(Some(path)) => nord_app::info!(
+            target: "nord::render",
+            benchmark_report = %path.display(),
+            "Wrote the render benchmark report"
+        ),
+        Ok(None) => nord_app::warn!(
+            target: "nord::render",
+            "Could not locate the executable path for the render benchmark report"
+        ),
+        Err(error) => nord_app::warn!(
+            target: "nord::render",
+            %error,
+            "Could not write the render benchmark report beside the executable"
+        ),
+    }
     *pending = false;
     Ok(())
+}
+
+fn cpu_queue_timing_report(frames: &[BenchmarkFrame]) -> String {
+    let stages: [(&str, fn(&ApplicationRenderQueueTiming) -> u64); 6] = [
+        ("encode", |timing| timing.encode_ns),
+        ("transients", |timing| timing.transients_ns),
+        ("barriers", |timing| timing.barriers_ns),
+        ("commands", |timing| timing.commands_ns),
+        ("submit", |timing| timing.submit_ns),
+        ("cleanup", |timing| timing.cleanup_ns),
+    ];
+    let mut result = serde_json::Map::new();
+    for (name, select) in stages {
+        let mut values = frames.iter().map(|frame| select(&frame.queue)).collect::<Vec<_>>();
+        values.sort_unstable();
+        let p50 = values[values.len().saturating_mul(50).div_ceil(100).max(1) - 1];
+        let p95 = values[values.len().saturating_mul(95).div_ceil(100).max(1) - 1];
+        result.insert(name.to_owned(), serde_json::json!({"p50_ns": p50, "p95_ns": p95}));
+    }
+    serde_json::Value::Object(result).to_string()
+}
+
+fn gpu_timing_report(frames: &[ApplicationGpuFrameTiming]) -> String {
+    if frames.is_empty() {
+        return "null".to_string();
+    }
+    let percentile = |values: &mut Vec<u64>, percent: usize| {
+        values.sort_unstable();
+        let rank = values.len().saturating_mul(percent).div_ceil(100).max(1);
+        values[rank - 1]
+    };
+    let mut graph = frames.iter().map(|frame| frame.graph_nanoseconds).collect::<Vec<_>>();
+    let mut copy = frames.iter().map(|frame| frame.present_copy_nanoseconds).collect::<Vec<_>>();
+    let mut gap =
+        frames.iter().map(|frame| frame.graph_to_copy_gap_nanoseconds).collect::<Vec<_>>();
+    let pass_count = frames[0].passes.len();
+    let passes = (0..pass_count)
+        .map(|index| {
+            let mut values = frames.iter().map(|frame| frame.passes[index].nanoseconds).collect();
+            let p50 = percentile(&mut values, 50);
+            let p95 = percentile(&mut values, 95);
+            serde_json::json!({"name": frames[0].passes[index].name, "p50_ns": p50, "p95_ns": p95})
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "sample_count": frames.len(),
+        "graph_p50_ns": percentile(&mut graph, 50),
+        "graph_p95_ns": percentile(&mut graph, 95),
+        "present_copy_p50_ns": percentile(&mut copy, 50),
+        "present_copy_p95_ns": percentile(&mut copy, 95),
+        "graph_to_copy_gap_p50_ns": percentile(&mut gap, 50),
+        "graph_to_copy_gap_p95_ns": percentile(&mut gap, 95),
+        "passes": passes,
+    })
+    .to_string()
 }
 
 fn occlusion_culling_enabled() -> bool {
@@ -1090,15 +1448,6 @@ fn initial_shadow_visibility(
     let mut draw_ranges = Vec::with_capacity(scene.instance_count());
     let metrics = scene.update_visibility(view_projection, &mut visible_mask, &mut draw_ranges);
     Ok((visible_mask, draw_ranges, metrics))
-}
-
-fn test_cube_transform() -> nord_app::ApplicationResult<Mat4> {
-    let rotation = Quat::from_axis_angle(Vec3::Y, 0.65)
-        .zip(Quat::from_axis_angle(Vec3::X, -0.35))
-        .map(|(yaw, pitch)| yaw * pitch)
-        .ok_or_else(|| ApplicationDiagnosticError::msg("test cube rotation is invalid"))?;
-    Mat4::from_translation_rotation_scale(Vec3::ZERO, rotation, Vec3::splat(0.9))
-        .ok_or_else(|| ApplicationDiagnosticError::msg("test cube transform is invalid"))
 }
 
 fn make_test_cube() -> nord_app::ApplicationResult<GameMesh> {

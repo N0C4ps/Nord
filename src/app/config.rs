@@ -10,6 +10,7 @@ pub(crate) struct GameConfig {
     pub(crate) threading: ThreadingConfig,
     pub(crate) tasks: TasksConfig,
     pub(crate) timing: TimingConfig,
+    pub(crate) world: WorldConfig,
 }
 
 impl GameConfig {
@@ -50,6 +51,12 @@ impl GameConfig {
         }
         if self.tasks.priority_aging_interval_ms == 0 {
             return Err("tasks.priority_aging_interval_ms must be greater than zero".to_owned());
+        }
+        if self.world.chunks_above_origin < 1 {
+            return Err("world.chunks_above_origin must be at least one".to_owned());
+        }
+        if self.world.chunks_below_origin < 1 {
+            return Err("world.chunks_below_origin must be at least one".to_owned());
         }
         Ok(())
     }
@@ -95,13 +102,28 @@ pub(crate) struct MemoryConfig {
     pub(crate) budget_bytes: Option<u64>,
 }
 
-/// Retained for config-file compatibility; the game does not start the task scheduler yet.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct TasksConfig {
     pub(crate) queue_capacity: usize,
     pub(crate) max_in_flight: Option<usize>,
     pub(crate) priority_aging_interval_ms: u64,
+}
+
+/// Vertical extent of the game's chunk world, counted from chunk Y=0.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct WorldConfig {
+    /// Includes the chunk at Y=0; positive Y chunks are currently sparse air.
+    pub(crate) chunks_above_origin: i32,
+    /// Sets the lowest chunk coordinate to `-chunks_below_origin`.
+    pub(crate) chunks_below_origin: i32,
+}
+
+impl Default for WorldConfig {
+    fn default() -> Self {
+        Self { chunks_above_origin: 2, chunks_below_origin: 64 }
+    }
 }
 
 impl Default for TasksConfig {

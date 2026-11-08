@@ -88,7 +88,7 @@ impl ApplicationRuntime {
                     renderer.advance_simulation(input_system, fixed_step)
                 })
                 .context("advancing the game loop")?;
-            renderer.render_frame()?;
+            renderer.render_frame(game_loop.latest_fps())?;
             if renderer.surface_suspended() {
                 thread::sleep(Duration::from_millis(16));
             }

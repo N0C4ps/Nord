@@ -5,8 +5,9 @@ use nord_app::{
     ApplicationDiagnosticError, ApplicationErrorContext, ApplicationEventSystem,
     ApplicationInputSystem, ApplicationJobSystem, ApplicationJsonFileConfig, ApplicationLogger,
     ApplicationLoggerConfig, ApplicationMemoryManager, ApplicationOpenTelemetryConfig,
-    ApplicationPlatform, ApplicationResult, ApplicationServicesBuilder, ApplicationThreadPool,
-    ApplicationThreadPoolConfig, ApplicationWindowConfig,
+    ApplicationPlatform, ApplicationResult, ApplicationSchedulerConfig, ApplicationServicesBuilder,
+    ApplicationTaskScheduler, ApplicationThreadPool, ApplicationThreadPoolConfig,
+    ApplicationWindowConfig,
 };
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
@@ -88,7 +89,7 @@ impl AppDependencies {
         let events = Arc::new(ApplicationEventSystem::new());
         let inputs = Arc::new(ApplicationInputSystem::new());
         let main_window = create_main_window(&platform, &config)?;
-        builder.register(config).context("registering game configuration")?;
+        builder.register(config.clone()).context("registering game configuration")?;
         let thread_pool_config = match configured_worker_threads {
             Some(count) => ApplicationThreadPoolConfig::default().with_worker_threads(
                 NonZeroUsize::new(count).ok_or_else(|| {
@@ -104,6 +105,30 @@ impl AppDependencies {
                 .context("creating the CPU worker pool")?,
         );
         let jobs = Arc::new(ApplicationJobSystem::new(Arc::clone(&thread_pool)));
+        let max_in_flight = match config.tasks.max_in_flight {
+            Some(value) => Some(NonZeroUsize::new(value).ok_or_else(|| {
+                ApplicationDiagnosticError::msg(
+                    "tasks.max_in_flight must be greater than zero when set",
+                )
+            })?),
+            None => None,
+        };
+        let task_config = ApplicationSchedulerConfig::default()
+            .with_queue_capacity(NonZeroUsize::new(config.tasks.queue_capacity).ok_or_else(
+                || {
+                    ApplicationDiagnosticError::msg(
+                        "tasks.queue_capacity must be greater than zero",
+                    )
+                },
+            )?)
+            .with_max_in_flight(max_in_flight)
+            .with_priority_aging_interval(std::time::Duration::from_millis(
+                config.tasks.priority_aging_interval_ms,
+            ));
+        let scheduler = Arc::new(
+            ApplicationTaskScheduler::new(Arc::clone(&thread_pool), task_config)
+                .context("creating the bounded priority task scheduler")?,
+        );
         if let Some(error) = &crash_reporter.diagnostics().native_minidump_error {
             nord_app::warn!(
                 name: "native_crash_dumps_unavailable",
@@ -122,6 +147,7 @@ impl AppDependencies {
         builder.register_shared(memory).context("registering application memory manager")?;
         builder.register_shared(thread_pool).context("registering the worker pool")?;
         builder.register_shared(jobs).context("registering the job system")?;
+        builder.register_shared(scheduler).context("registering the task scheduler")?;
 
         // Keep the DI implementation behind this game-owned composition adapter.
         let container = builder.build();
@@ -141,6 +167,9 @@ impl AppDependencies {
         let jobs = container
             .get::<ApplicationJobSystem>()
             .context("resolving the job system from application services")?;
+        let scheduler = container
+            .get::<ApplicationTaskScheduler>()
+            .context("resolving the task scheduler from application services")?;
         let memory = container
             .get::<ApplicationMemoryManager>()
             .context("resolving application memory manager from services")?;
@@ -149,7 +178,12 @@ impl AppDependencies {
             main_window,
             config.window.width,
             config.window.height,
-            (*jobs).clone(),
+            crate::render::GameRenderServices {
+                jobs: (*jobs).clone(),
+                scheduler: (*scheduler).clone(),
+                chunks_above_origin: config.world.chunks_above_origin,
+                chunks_below_origin: config.world.chunks_below_origin,
+            },
             &memory,
         )?;
         Ok(Self {

@@ -108,7 +108,7 @@ fn gradient_vertices() -> Vec<u8> {
         (1.0, 1.0, top),
         (1.0, -1.0, horizon),
     ];
-    let mut bytes = Vec::with_capacity(VERTEX_BYTES as usize);
+    let mut bytes = Vec::new();
     for (x, y, color) in points {
         for value in [x, y, color[0], color[1], color[2]] {
             bytes.extend_from_slice(&value.to_le_bytes());
