@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "key": "nord:grass",
+  "numeric_id": 2,
+  "name": "Grama",
+  "texture": {
+    "top": "textures/blocks/grass_block.png",
+    "side": "textures/blocks/grass_block_side.png",
+    "bottom": "textures/blocks/dirt_block.png"
+  },
+  "properties": {
+    "collidable": true,
+    "interactable": true,
+    "breakable": true,
+    "transparent": false,
+    "replaceable": false,
+    "placeable": true,
+    "renderable": true,
+    "hardness": 0.6
+  }
+}

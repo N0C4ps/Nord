@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "key": "nord:dirt",
+  "numeric_id": 1,
+  "name": "Terra",
+  "texture": "textures/blocks/dirt_block.png",
+  "properties": {
+    "collidable": true,
+    "interactable": true,
+    "breakable": true,
+    "transparent": false,
+    "replaceable": false,
+    "placeable": true,
+    "renderable": true,
+    "hardness": 0.5
+  }
+}

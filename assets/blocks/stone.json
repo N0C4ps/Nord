@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "key": "nord:stone",
+  "numeric_id": 3,
+  "name": "Pedra",
+  "texture": "textures/blocks/stone_block.png",
+  "properties": {
+    "collidable": true,
+    "interactable": true,
+    "breakable": true,
+    "transparent": false,
+    "replaceable": false,
+    "placeable": true,
+    "renderable": true,
+    "hardness": 1.5
+  }
+}

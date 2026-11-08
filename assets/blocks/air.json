@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "key": "nord:air",
+  "numeric_id": 0,
+  "name": "Ar",
+  "properties": {
+    "collidable": false,
+    "interactable": false,
+    "breakable": false,
+    "transparent": true,
+    "replaceable": true,
+    "placeable": false,
+    "renderable": false,
+    "hardness": 0.0
+  }
+}

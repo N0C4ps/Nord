@@ -13,6 +13,10 @@
   "threading": {
     "worker_threads": null
   },
+  "world": {
+    "chunks_above_origin": 2,
+    "chunks_below_origin": 64
+  },
   "timing": {
     "max_frame_delta_ms": 250,
     "fixed_step_ns": 16666667,
