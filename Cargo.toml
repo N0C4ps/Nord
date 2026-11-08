@@ -32,6 +32,7 @@ members = [
     "crates/nord_math",
     "crates/nord_camera",
     "crates/nord_mesh",
+    "crates/nord_json_compressor",
 ]
 
 [workspace.package]
@@ -51,7 +52,10 @@ ctrlc = "3.5.2"
 nord_app = { path = "crates/nord_app" }
 nord_camera = { path = "crates/nord_camera" }
 nord_mesh = { path = "crates/nord_mesh" }
+nord_world = { path = "crates/nord_world" }
+png = "0.18.1"
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 
 [profile.dev]
 opt-level = 0

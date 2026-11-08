@@ -22,6 +22,7 @@ nord_events = { path = "../nord_events" }
 nord_inputs = { path = "../nord_inputs" }
 nord_math = { path = "../nord_math" }
 nord_render = { path = "../nord_render" }
+nord_json_compressor = { path = "../nord_json_compressor" }
 
 [lints]
 workspace = true

@@ -6,6 +6,7 @@ mod events;
 mod hash;
 mod inputs;
 mod jobs;
+mod json_compressor;
 mod logging;
 mod math;
 mod memory;
@@ -38,6 +39,7 @@ pub use inputs::{
     ApplicationKeyCode, ApplicationModifiers, ApplicationPointerButton,
 };
 pub use jobs::ApplicationJobSystem;
+pub use json_compressor::*;
 pub use logging::{
     ApplicationInstrument, ApplicationJsonFileConfig, ApplicationLogDiagnostics,
     ApplicationLogFileRotation, ApplicationLogFlushError, ApplicationLogQueueFullPolicy,
